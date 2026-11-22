@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+  CenterProfile,
   Exam,
   GeneratedReportFile,
   ReadinessAlert,
@@ -14,6 +15,7 @@ import type {
   Teacher,
 } from '../types/seating.ts';
 import {
+  NON_EXAM_GRADING_CODES,
   normalizeSubjectToken,
   parseSubjectTokens,
   studentTakesSubject,
@@ -45,6 +47,8 @@ const SUBJECT_DISPLAY_LABELS: Record<string, string> = {
   BST: 'BUSINESS STUDIES',
   SANS: 'SANSKRIT',
   AGRI: 'AGRICULTURE',
+  MLSC: 'MILITARY SCIENCE',
+  URDU: 'URDU',
 };
 
 function deduplicateStudentsByRoll(list: Student[]): Student[] {
@@ -349,18 +353,53 @@ function createSeededSession2526(): SessionData {
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), '.data', 'seating-db.json');
 
+const DEFAULT_CENTER_PROFILE: CenterProfile = {
+  schoolName: 'TAGORE S S I C HAPUR',
+  centerCode: '13265',
+  boardName: 'UPMSP Board Examination Center',
+  principalName: 'CENTER SUPERINTENDENT',
+  controllerName: 'EXAM IN-CHARGE',
+  phone: '',
+  email: '',
+  address: 'Hapur, Uttar Pradesh',
+  updatedAt: new Date().toISOString(),
+};
+
 interface PersistedDb {
   sessions: Record<string, SessionData>;
   activeSession: string;
+  profile?: CenterProfile;
 }
 
 export class SessionStore {
   public sessions: Record<string, SessionData> = {};
+  public profile: CenterProfile = { ...DEFAULT_CENTER_PROFILE };
   private dbPath: string;
 
   constructor(dbPath = DEFAULT_DB_PATH) {
     this.dbPath = dbPath;
     this.loadOrInitialize();
+  }
+
+  public getProfile(): CenterProfile {
+    return { ...this.profile };
+  }
+
+  public saveProfile(input: Partial<CenterProfile>): CenterProfile {
+    this.profile = {
+      ...this.profile,
+      schoolName: String(input.schoolName ?? this.profile.schoolName).trim() || DEFAULT_CENTER_PROFILE.schoolName,
+      centerCode: String(input.centerCode ?? this.profile.centerCode).trim().toUpperCase(),
+      boardName: String(input.boardName ?? this.profile.boardName).trim(),
+      principalName: String(input.principalName ?? this.profile.principalName).trim(),
+      controllerName: String(input.controllerName ?? this.profile.controllerName).trim(),
+      phone: String(input.phone ?? this.profile.phone).trim(),
+      email: String(input.email ?? this.profile.email).trim(),
+      address: String(input.address ?? this.profile.address).trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.persist();
+    return this.getProfile();
   }
 
   public getDynamicSubjects(
@@ -372,7 +411,7 @@ export class SessionStore {
 
     const addCode = (className: number, rawCode: string) => {
       const code = normalizeSubjectToken(rawCode) || rawCode.trim().toUpperCase();
-      if (!code) return;
+      if (!code || NON_EXAM_GRADING_CODES.has(code)) return;
       const cls = Number(className) === 12 ? 12 : 10;
       const key = `${cls}|${code}`;
       if (!seen.has(key)) {
@@ -424,6 +463,9 @@ export class SessionStore {
       if (fs.existsSync(this.dbPath)) {
         const raw = fs.readFileSync(this.dbPath, 'utf-8');
         const parsed = JSON.parse(raw) as PersistedDb;
+        if (parsed && parsed.profile) {
+          this.profile = { ...DEFAULT_CENTER_PROFILE, ...parsed.profile };
+        }
         if (parsed && parsed.sessions && Object.keys(parsed.sessions).length > 0) {
           this.sessions = parsed.sessions;
           for (const key of Object.keys(this.sessions)) {
@@ -458,6 +500,7 @@ export class SessionStore {
       const payload: PersistedDb = {
         sessions: this.sessions,
         activeSession: '2025-26',
+        profile: this.profile,
       };
       const tmpPath = `${this.dbPath}.tmp`;
       fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), {

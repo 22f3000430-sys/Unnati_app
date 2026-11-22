@@ -18,11 +18,32 @@ export function validateExtractedStudents(
     Array.from(existingDbRolls, (r) => r.replace(/\s+/g, '').trim().toUpperCase()).filter(Boolean),
   );
   const batchCounts = new Map<string, number>();
+  const lengthCounts = new Map<number, number>();
+  let totalNumericRolls = 0;
 
   for (const r of inputRows) {
     const roll = (r.roll_no ?? '').replace(/\s+/g, '').trim().toUpperCase();
     if (roll) {
       batchCounts.set(roll, (batchCounts.get(roll) ?? 0) + 1);
+      if (/^\d+$/.test(roll)) {
+        totalNumericRolls++;
+        lengthCounts.set(roll.length, (lengthCounts.get(roll.length) ?? 0) + 1);
+      }
+    }
+  }
+
+  let modalRollLength: number | null = null;
+  if (totalNumericRolls >= 5) {
+    let bestLen = 0;
+    let bestCount = 0;
+    for (const [len, cnt] of lengthCounts.entries()) {
+      if (cnt > bestCount) {
+        bestLen = len;
+        bestCount = cnt;
+      }
+    }
+    if (bestCount / totalNumericRolls >= 0.6) {
+      modalRollLength = bestLen;
     }
   }
 
@@ -49,6 +70,17 @@ export function validateExtractedStudents(
         message: 'Missing or invalid Roll No (min 4 characters)',
       });
     } else {
+      if (
+        modalRollLength !== null &&
+        /^\d+$/.test(roll) &&
+        roll.length !== modalRollLength
+      ) {
+        issues.push({
+          field: 'roll_no',
+          severity: 'warning',
+          message: `Roll No has ${roll.length} digits (batch standard is ${modalRollLength}) — verify no clipped edge digits`,
+        });
+      }
       if ((batchCounts.get(roll) ?? 0) > 1) {
         duplicateInBatch++;
         issues.push({

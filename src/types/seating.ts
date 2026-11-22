@@ -167,6 +167,29 @@ export interface SeatMatrixRow {
   cells: SeatMatrixCell[];
 }
 
+export interface AllottedInvigilator {
+  teacherId: number;
+  name: string;
+  teacherType: 'HOST' | 'EXTERNAL';
+  subject: string;
+  schoolName: string;
+  phone?: string;
+  role: 'Invigilator 1' | 'Invigilator 2';
+  subjectConflict: boolean;
+}
+
+export interface CenterProfile {
+  schoolName: string;
+  centerCode: string;
+  boardName: string;
+  principalName: string;
+  controllerName: string;
+  phone: string;
+  email: string;
+  address: string;
+  updatedAt: string;
+}
+
 export interface RoomSeatingReport {
   roomNo: string;
   floor: number;
@@ -189,6 +212,7 @@ export interface RoomSeatingReport {
   classes: number[];
   subjects: string[];
   rollRanges: string[];
+  invigilators?: AllottedInvigilator[];
   assignments: SeatAssignment[];
   matrixRows: SeatMatrixRow[];
 }
@@ -212,6 +236,8 @@ export interface BoardSeatingPreviewResponse {
     orthogonalConflicts: number;
     diagonalConflicts: number;
     teachersRequired: number;
+    teachersAllotted?: number;
+    unfilledTeacherSlots?: number;
   };
 }
 
@@ -283,6 +309,7 @@ export interface GeneratedReportFile {
   shift: string;
   totalRooms: number;
   totalStudents: number;
+  centerProfile?: Partial<CenterProfile>;
   roomReports: RoomSeatingReport[];
 }
 

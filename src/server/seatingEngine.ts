@@ -9,7 +9,9 @@ import type {
   SeatingGenerationOptions,
   SeatingModuleType,
   Student,
+  Teacher,
 } from '../types/seating.ts';
+import { normalizeSubjectToken } from '../utils/subjectNormalizer.ts';
 
 interface StudentQueueItem {
   exam: Exam;
@@ -1182,11 +1184,160 @@ export function countAdjacencyConflicts(
   return { orthogonalConflicts: orthogonal, diagonalConflicts: diagonal };
 }
 
+export function allotTeachersToRooms(
+  roomReports: RoomSeatingReport[],
+  teachersInput: Teacher[] = [],
+): { teachersAllotted: number; unfilledTeacherSlots: number; allotmentLogs: string[] } {
+  if (roomReports.length === 0) {
+    return { teachersAllotted: 0, unfilledTeacherSlots: 0, allotmentLogs: [] };
+  }
+
+  for (const r of roomReports) {
+    r.invigilators = [];
+  }
+
+  if (teachersInput.length === 0) {
+    return {
+      teachersAllotted: 0,
+      unfilledTeacherSlots: roomReports.length * 2,
+      allotmentLogs: [],
+    };
+  }
+
+  const slotGroups = new Map<string, RoomSeatingReport[]>();
+  for (const rep of roomReports) {
+    const first = rep.assignments[0];
+    const slotKey = first ? `${first.examDate}|${first.shift}` : 'DEFAULT';
+    const arr = slotGroups.get(slotKey) ?? [];
+    arr.push(rep);
+    slotGroups.set(slotKey, arr);
+  }
+
+  const dutyCount = new Map<number, number>();
+  for (const t of teachersInput) {
+    dutyCount.set(t.id, 0);
+  }
+
+  const allotmentLogs: string[] = [];
+  let teachersAllotted = 0;
+
+  const doesTeacherMatchRoomSubject = (teacher: Teacher, room: RoomSeatingReport) => {
+    const tSubj = normalizeSubjectToken(teacher.subject);
+    if (!tSubj || tSubj === 'GENERAL' || tSubj === 'ALL') return false;
+    return room.subjects.some((s) => {
+      const rSubj = normalizeSubjectToken(s);
+      return rSubj === tSubj;
+    });
+  };
+
+  for (const [slotKey, slotRooms] of slotGroups.entries()) {
+    const busyInSlot = new Set<number>();
+
+    // Prioritize higher-occupancy rooms first when pool is limited
+    const orderedRooms = [...slotRooms].sort(
+      (a, b) => b.totalStudents - a.totalStudents || a.roomNo.localeCompare(b.roomNo),
+    );
+
+    const pickTeacherForRoom = (
+      room: RoomSeatingReport,
+      preferredType?: 'HOST' | 'EXTERNAL',
+    ): { teacher: Teacher; subjectConflict: boolean } | null => {
+      const available = teachersInput.filter((t) => !busyInSlot.has(t.id));
+      if (available.length === 0) return null;
+
+      available.sort((a, b) => {
+        const aSubjConflict = doesTeacherMatchRoomSubject(a, room) ? 1 : 0;
+        const bSubjConflict = doesTeacherMatchRoomSubject(b, room) ? 1 : 0;
+        if (aSubjConflict !== bSubjConflict) return aSubjConflict - bSubjConflict;
+
+        if (preferredType) {
+          const aPref = a.teacherType === preferredType ? 0 : 1;
+          const bPref = b.teacherType === preferredType ? 0 : 1;
+          if (aPref !== bPref) return aPref - bPref;
+        }
+
+        const aDuties = dutyCount.get(a.id) ?? 0;
+        const bDuties = dutyCount.get(b.id) ?? 0;
+        if (aDuties !== bDuties) return aDuties - bDuties;
+
+        return a.id - b.id;
+      });
+
+      const chosen = available[0];
+      return {
+        teacher: chosen,
+        subjectConflict: doesTeacherMatchRoomSubject(chosen, room),
+      };
+    };
+
+    // Pass 1: Give every room Invigilator 1 first (preferring EXTERNAL first if available for board neutrality)
+    for (const room of orderedRooms) {
+      const pick = pickTeacherForRoom(room, 'EXTERNAL');
+      if (!pick) break;
+      busyInSlot.add(pick.teacher.id);
+      dutyCount.set(pick.teacher.id, (dutyCount.get(pick.teacher.id) ?? 0) + 1);
+      room.invigilators = room.invigilators ?? [];
+      room.invigilators.push({
+        teacherId: pick.teacher.id,
+        name: pick.teacher.name,
+        teacherType: pick.teacher.teacherType,
+        subject: pick.teacher.subject,
+        schoolName: pick.teacher.schoolName,
+        phone: pick.teacher.phone,
+        role: 'Invigilator 1',
+        subjectConflict: pick.subjectConflict,
+      });
+      teachersAllotted++;
+    }
+
+    // Pass 2: Pair Invigilator 2 preferring the opposite type (HOST + EXTERNAL pairing)
+    for (const room of orderedRooms) {
+      const firstInv = room.invigilators?.[0];
+      const desiredPartnerType: 'HOST' | 'EXTERNAL' =
+        firstInv?.teacherType === 'EXTERNAL' ? 'HOST' : 'EXTERNAL';
+      const pick = pickTeacherForRoom(room, desiredPartnerType);
+      if (!pick) break;
+      busyInSlot.add(pick.teacher.id);
+      dutyCount.set(pick.teacher.id, (dutyCount.get(pick.teacher.id) ?? 0) + 1);
+      room.invigilators = room.invigilators ?? [];
+      room.invigilators.push({
+        teacherId: pick.teacher.id,
+        name: pick.teacher.name,
+        teacherType: pick.teacher.teacherType,
+        subject: pick.teacher.subject,
+        schoolName: pick.teacher.schoolName,
+        phone: pick.teacher.phone,
+        role: 'Invigilator 2',
+        subjectConflict: pick.subjectConflict,
+      });
+      teachersAllotted++;
+    }
+
+    const slotShortage = slotRooms.length * 2 - slotRooms.reduce((s, r) => s + (r.invigilators?.length ?? 0), 0);
+    if (slotShortage > 0) {
+      allotmentLogs.push(
+        `Invigilator Allotment (${slotKey.replace('|', ' ')}): allotted ${slotRooms.reduce((s, r) => s + (r.invigilators?.length ?? 0), 0)}/${slotRooms.length * 2} duties (${slotShortage} short — add more teachers in Master Data).`,
+      );
+    } else {
+      allotmentLogs.push(
+        `Invigilator Allotment (${slotKey.replace('|', ' ')}): full 2-teacher coverage across all ${slotRooms.length} room(s).`,
+      );
+    }
+  }
+
+  return {
+    teachersAllotted,
+    unfilledTeacherSlots: Math.max(0, roomReports.length * 2 - teachersAllotted),
+    allotmentLogs,
+  };
+}
+
 export function buildRoomReports(
   assignments: SeatAssignment[],
   rooms: Room[],
   dedicatedGirlsRoomIds: number[] = [],
   roomPatterns: Map<string, RoomSeatingReport['allocationPattern']> = new Map(),
+  teachers: Teacher[] = [],
 ): RoomSeatingReport[] {
   const dedicatedRoomNumbers = new Set(
     rooms.filter((r) => dedicatedGirlsRoomIds.includes(r.id)).map((r) => r.roomNumber),
@@ -1306,6 +1457,10 @@ export function buildRoomReports(
       assignments: groupAssignments,
       matrixRows,
     });
+  }
+
+  if (teachers.length > 0) {
+    allotTeachersToRooms(reports, teachers);
   }
 
   return reports;
@@ -1434,6 +1589,7 @@ export function generateBoardSeating(
   roomsInput: Room[],
   getStudentsForExam: (className: number, subjectCode: string) => Student[],
   options: SeatingGenerationOptions,
+  teachersInput: Teacher[] = [],
 ): BoardSeatingPreviewResponse {
   const moduleType: SeatingModuleType = options.moduleType ?? 'BOARD';
   const exams = [...examsInput].sort(
@@ -1834,6 +1990,14 @@ export function generateBoardSeating(
     options.dedicatedGirlsRoomsEnabled ? options.girlsRoomIds : [],
     roomPatterns,
   );
+  const { teachersAllotted, unfilledTeacherSlots, allotmentLogs } = allotTeachersToRooms(
+    roomReports,
+    teachersInput,
+  );
+  if (teachersInput.length > 0) {
+    pairingLog.push(...allotmentLogs);
+  }
+
   const totalCapacityUsedRooms = roomReports.reduce((sum, r) => sum + r.capacity, 0);
   const utilizationPercent =
     totalCapacityUsedRooms > 0
@@ -1863,6 +2027,8 @@ export function generateBoardSeating(
       orthogonalConflicts,
       diagonalConflicts,
       teachersRequired: roomReports.length * 2,
+      teachersAllotted,
+      unfilledTeacherSlots,
     },
   };
 }

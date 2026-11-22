@@ -139,6 +139,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                               rep.shift,
                               rep.fileName,
                               rep.sessionYear,
+                              rep.centerProfile,
                             )
                           }
                           className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-[#0F766E] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#115E59] cursor-pointer"
@@ -181,6 +182,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       inspectingReport.shift,
                       inspectingReport.fileName,
                       inspectingReport.sessionYear,
+                      inspectingReport.centerProfile,
                     )
                   }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F766E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#115E59] cursor-pointer"
@@ -191,6 +193,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setInspectingReport(null)}
+                  aria-label="Close report preview"
                   className="rounded-lg p-1.5 text-slate-400 hover:bg-white dark:hover:bg-[#182725] hover:text-[#111C1B] dark:hover:text-white cursor-pointer"
                 >
                   <X className="h-5 w-5" />
@@ -221,8 +224,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               </div>
 
               {activeRoomReport && (
-                <div className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
-                  Floor {activeRoomReport.floor} · {activeRoomReport.allocationPattern}
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                  <span>
+                    Floor {activeRoomReport.floor} · {activeRoomReport.allocationPattern}
+                  </span>
+                  {activeRoomReport.invigilators && activeRoomReport.invigilators.length > 0 && (
+                    <span className="rounded-md bg-white dark:bg-[#142321] border border-[#D8D4CA] dark:border-[#2A403E] px-2.5 py-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
+                      Duty: {activeRoomReport.invigilators.map((i) => `${i.name} (${i.teacherType})`).join(' · ')}
+                    </span>
+                  )}
                 </div>
               )}
             </div>

@@ -108,6 +108,7 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
 
   const [previewData, setPreviewData] = useState<BoardSeatingPreviewResponse | null>(null);
   const [previewOptions, setPreviewOptions] = useState<SeatingGenerationOptions | null>(null);
+  const [switchingPolicy, setSwitchingPolicy] = useState(false);
 
   const isSchoolMode = moduleType === 'SCHOOL';
 
@@ -219,6 +220,32 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
       onNotify('error', 'Seating Generation Failed', String(err));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleSwitchTailPolicy = async (nextPolicy: TailRoomPolicy) => {
+    setTailRoomPolicy(nextPolicy);
+    if (!previewOptions) return;
+    const nextOptions: SeatingGenerationOptions = {
+      ...previewOptions,
+      tailRoomPolicy: nextPolicy,
+    };
+    setSwitchingPolicy(true);
+    try {
+      const preview = await apiFetch<BoardSeatingPreviewResponse>(
+        '/api/board-seating/preview',
+        sessionYear,
+        {
+          method: 'POST',
+          body: JSON.stringify({ moduleType, examIds: selectedExamIds, options: nextOptions }),
+        },
+      );
+      setPreviewOptions(nextOptions);
+      setPreviewData(preview);
+    } catch (err) {
+      onNotify('error', 'Failed to Switch Strategy', String(err));
+    } finally {
+      setSwitchingPolicy(false);
     }
   };
 
@@ -653,6 +680,9 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
           preview={previewData}
           examIds={selectedExamIds}
           girlsRoomIds={previewOptions.girlsRoomIds}
+          activeTailPolicy={previewOptions.tailRoomPolicy ?? tailRoomPolicy}
+          switchingPolicy={switchingPolicy}
+          onChangeTailPolicy={(policy) => void handleSwitchTailPolicy(policy)}
           onClose={() => setPreviewData(null)}
           onSavedAndGoToReports={() => {
             setPreviewData(null);

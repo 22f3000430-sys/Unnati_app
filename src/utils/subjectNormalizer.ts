@@ -20,7 +20,11 @@ const SYNONYM_GROUPS: string[][] = [
   ['BST', 'BUS', 'BUSINESS'],
   ['SANS', 'SKT', 'SANSKRIT'],
   ['AGRI', 'AG', 'AGRICULTURE'],
+  ['MLSC', 'MILSC', 'MILITARY', 'MILITARYSCIENCE'],
+  ['URDU', 'URD'],
 ];
+
+export const NON_EXAM_GRADING_CODES = new Set(['MSPE', 'MYSP', 'SUPW']);
 
 const CANONICAL_MAP = new Map<string, string>();
 for (const group of SYNONYM_GROUPS) {

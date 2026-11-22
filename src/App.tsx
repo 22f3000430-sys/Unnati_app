@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Building2,
   CalendarCog,
   FileText,
   GraduationCap,
@@ -34,6 +35,7 @@ import { ReportsView } from './components/ReportsView.tsx';
 import { DialogModal, type DialogState } from './components/DialogModal.tsx';
 import { UnnatiLogo } from './components/UnnatiLogo.tsx';
 import { LicenseModal } from './components/LicenseModal.tsx';
+import { ProfileView } from './components/ProfileView.tsx';
 
 type NavKey =
   | 'dashboard'
@@ -43,7 +45,8 @@ type NavKey =
   | 'lookup'
   | 'students'
   | 'master'
-  | 'reports';
+  | 'reports'
+  | 'profile';
 
 const NAV_GROUPS: Array<{
   heading: string;
@@ -74,6 +77,7 @@ const NAV_GROUPS: Array<{
     items: [
       { key: 'master', label: 'Master Data', icon: CalendarCog },
       { key: 'reports', label: 'Reports', icon: FileText },
+      { key: 'profile', label: 'Center Profile', icon: Building2 },
     ],
   },
 ];
@@ -620,6 +624,15 @@ export function App() {
             <ReportsView
               sessionYear={sessionYear}
               onGoToSeating={() => setActiveNav('board')}
+              onNotify={notify}
+            />
+          )}
+
+          {activeNav === 'profile' && (
+            <ProfileView
+              sessionYear={sessionYear}
+              license={licenseStatus}
+              onLicenseUpdated={setLicenseStatus}
               onNotify={notify}
             />
           )}

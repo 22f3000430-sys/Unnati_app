@@ -1,8 +1,9 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { PDFDocument } from 'pdf-lib';
 import { extractText, getDocumentProxy } from 'unpdf';
 import type { OcrStudentDto } from '../types/seating.ts';
 import { parseStudentsFromText } from '../utils/importParsers.ts';
+import { NON_EXAM_GRADING_CODES } from '../utils/subjectNormalizer.ts';
 
 export interface PdfExtractionResult {
   students: OcrStudentDto[];
@@ -23,31 +24,32 @@ const EXTRACTION_SCHEMA = {
       type: Type.STRING,
       description: 'Class level: "10" for High School / Class 10, "12" for Inter / Class 12, or "" if unclear',
     },
+    schoolCode: { type: Type.STRING, description: 'School code from SCH/SCHOOL CD/NAME header on this page, else ""' },
+    schoolName: { type: Type.STRING, description: 'School name from SCH/SCHOOL CD/NAME header on this page, else ""' },
     students: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          roll_no: { type: Type.STRING, description: 'Candidate Roll Number (digits). Empty "" if illegible.' },
+          roll_no: { type: Type.STRING, description: 'Candidate Roll Number (digits from ROLL-NO / ROLLNO column ONLY). Empty "" if illegible.' },
           form_no: { type: Type.STRING, description: 'Form number if visible, else ""' },
           student_name: { type: Type.STRING, description: 'Candidate full name in English uppercase, else ""' },
           mother_name: { type: Type.STRING, description: 'Mother name in English uppercase, else ""' },
           father_name: { type: Type.STRING, description: 'Father name in English uppercase, else ""' },
           gender: {
             type: Type.STRING,
-            description: 'Gender: "M" if S X column is 1 or Male, "F" if S X column is 2 or Female, or "" if illegible (never guess)',
+            description: 'Gender ONLY from "S X" (Sex) column immediately right of Hindi names: "M" if 1 or Male, "F" if 2 or Female, or "" if illegible (never guess or read M D)',
           },
           schoolCode: { type: Type.STRING, description: 'School code e.g. 1011, 1045, 1070, 1129' },
           schoolName: { type: Type.STRING, description: 'School name from SCH/SCHOOL CD/NAME header' },
           className: { type: Type.STRING, description: '"10" or "12"' },
           subjects: {
             type: Type.STRING,
-            description: 'Comma-separated offered subject codes, e.g. "HIND, ENG, MATH, SC, SLSC, DRG". Empty "" if unreadable.',
+            description: 'Comma-separated offered subject codes, e.g. "HIND, ENG, MATH, SC, SLSC, DRGD" or "HGEN, ENG, PHYS, CHEM, BIO". Exclude internal grading markers MSPE/MYSP. Empty "" if unreadable.',
           },
-          registration_no: { type: Type.STRING, description: 'Registration number if visible, else ""' },
-          sourcePage: { type: Type.INTEGER, description: '1-based page number inside this chunk where row appeared' },
+          registration_no: { type: Type.STRING, description: 'Registration number (not HS-YEAR-ROLL) if visible, else ""' },
         },
-        required: ['roll_no', 'student_name', 'gender', 'schoolCode', 'className', 'subjects'],
+        required: ['roll_no', 'student_name', 'gender', 'subjects'],
       },
     },
   },
@@ -93,27 +95,43 @@ async function extractTextLayerFromPdf(buffer: Uint8Array): Promise<{ text: stri
   return { text: String(text ?? ''), numPages };
 }
 
-async function splitPdfIntoChunks(
+async function splitPdfIntoPages(
   buffer: Uint8Array,
-  pagesPerChunk = 2,
-): Promise<Array<{ chunkBytes: Uint8Array; startPage: number; endPage: number }>> {
+): Promise<Array<{ pageBytes: Uint8Array; pageNumber: number }>> {
   const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
   const totalPages = srcDoc.getPageCount();
-  const chunks: Array<{ chunkBytes: Uint8Array; startPage: number; endPage: number }> = [];
+  const pages: Array<{ pageBytes: Uint8Array; pageNumber: number }> = [];
 
-  for (let start = 0; start < totalPages; start += pagesPerChunk) {
-    const end = Math.min(start + pagesPerChunk, totalPages);
+  for (let i = 0; i < totalPages; i++) {
     const subDoc = await PDFDocument.create();
-    const indices = Array.from({ length: end - start }, (_, idx) => start + idx);
-    const copiedPages = await subDoc.copyPages(srcDoc, indices);
-    for (const p of copiedPages) {
-      subDoc.addPage(p);
-    }
-    const chunkBytes = await subDoc.save();
-    chunks.push({ chunkBytes, startPage: start + 1, endPage: end });
+    const [copiedPage] = await subDoc.copyPages(srcDoc, [i]);
+    subDoc.addPage(copiedPage);
+    const pageBytes = await subDoc.save();
+    pages.push({ pageBytes, pageNumber: i + 1 });
   }
 
-  return chunks;
+  return pages;
+}
+
+function cleanSubjectList(rawSubjects: string): string {
+  return String(rawSubjects ?? '')
+    .split(/[\s,;]+/)
+    .map((t) => t.trim().toUpperCase())
+    .filter((t) => t && !NON_EXAM_GRADING_CODES.has(t))
+    .join(', ');
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface PageOcrPayload {
+  centerCode?: string;
+  centerName?: string;
+  detectedClass?: string;
+  schoolCode?: string;
+  schoolName?: string;
+  students?: Array<Partial<OcrStudentDto>>;
 }
 
 export async function extractStudentsFromUploadedDocument(
@@ -169,45 +187,35 @@ export async function extractStudentsFromUploadedDocument(
     }
   }
 
-  // 2. Scanned / rotated image PDF (e.g. DocScanner UP Board Nominal Roll) -> Gemini Vision
+  // 2. Scanned / rotated image PDF (e.g. DocScanner UP Board Nominal Roll) -> Single-page Gemini Vision with concurrency-3 batching
   if (!ai) {
     throw new Error(
       `"${fileName}" is a scanned image PDF or has an incomplete text layer. Please configure GEMINI_API_KEY in Settings > Secrets so the server can read scanned Nominal Roll sheets automatically, or upload a CSV file.`,
     );
   }
 
-  const chunks = await splitPdfIntoChunks(uint8, 2);
-  const allStudents: OcrStudentDto[] = [];
-  const seenRolls = new Set<string>();
+  const pages = await splitPdfIntoPages(uint8);
+  const fallbackClass = defaultClassName === '12' ? '12' : '10';
+  const pageResults: Array<{ pageNumber: number; payload: PageOcrPayload | null }> = new Array(
+    pages.length,
+  );
   const failedPages: string[] = [];
-  let centerCode = '';
-  let centerName = '';
-  let lastSchoolCode = defaultSchoolCode;
-  let lastSchoolName = '';
-  let lastClassName = defaultClassName === '12' ? '12' : '10';
 
-  for (const chunk of chunks) {
+  const extractSinglePage = async (page: { pageBytes: Uint8Array; pageNumber: number }) => {
     const prompt = [
-      `Extract EVERY student row from pages ${chunk.startPage}-${chunk.endPage} of this Indian board examination Nominal Roll PDF (pages may be rotated 90 degrees).`,
-      `Accuracy rules (CRITICAL):`,
-      `- NEVER guess or fabricate any missing or blurred field. If roll_no, student_name, gender, or subjects is illegible, return an empty string "" so our review table flags it for the operator.`,
-      `- "HIGH SCHOOL" means className="10". "INTER EXAM" / "INTER" means className="12". Fallback className="${lastClassName}".`,
-      `- Look at "SCHOOL CD/NAME" or "SCH CD/NAME" on each page (e.g. "1011 DEWAN INTER COLLEGE HAPUR", "1045 R R INT COLL WAJHEELPUR HAPUR", "1070 S N B S I C BABU GARH HAPUR", "1129 TAGORE S S I C HAPUR HAPUR").`,
-      `- Extract the numeric schoolCode (e.g. "1011") and clean schoolName separately. If a page header is cropped, inherit schoolCode="${lastSchoolCode}" and schoolName="${lastSchoolName}".`,
-      `- Gender column "S X" (Sex): "1" means "M" (Male), "2" means "F" (Female). If unreadable, return "".`,
-      `- Extract English candidate name, mother name, father name (ignore duplicate Hindi column text).`,
-      `- Extract subjects offered as clean comma-separated uppercase codes (e.g. "HIND, ENG, MATH, SC, SLSC, DRG" or "HGEN, ENG, PHYS, CHEM, BIO").`,
-      `- Set sourcePage to the 1-based PDF page number inside this chunk (1 or 2).`,
+      `Extract EVERY student row from page ${page.pageNumber} of this scanned Indian Board Examination Nominal Roll sheet (page may be rotated 90 degrees clockwise or counter-clockwise).`,
+      `CRITICAL UP BOARD / BOARD NOMINAL ROLL ACCURACY RULES:`,
+      `1. IGNORE PEEKED/CROPPED EDGE ROWS: Only extract complete student rows inside the main bordered nominal roll table. Do NOT extract partial rows from an adjacent binder page peeking along the top/bottom paper margin.`,
+      `2. NO GUESSING: If roll_no, student_name, gender, or subjects is blurred or cut off, return "" for that field so the verification table flags it.`,
+      `3. CLASS LEVEL: "HIGH SCHOOL" header = detectedClass "10". "INTER EXAM" / "INTERMEDIATE" header = detectedClass "12". Else "".`,
+      `4. SCHOOL HEADER: Read "SCH CD/NAME" or "SCHOOL CD/NAME" header on this page (e.g. "1011 DEWAN INTER COLLEGE HAPUR"). Populate page schoolCode and schoolName.`,
+      `5. GENDER COLUMN ("S X" vs "M D"): Read ONLY the "S X" (Sex) column immediately to the right of the Hindi candidate/father names: "1" = "M", "2" = "F". Do NOT confuse it with "M D" (Medium), "R C", or "C C".`,
+      `6. ROLL NO vs HS-YEAR-ROLL: In Inter Class 12 sheets, IGNORE the "HS-YEAR-ROLL" column (format like 2024-1240481153) — extract ONLY the candidate's current exam ROLLNO and separate REGISTRATION-NO.`,
+      `7. SUBJECTS: Extract comma-separated offered written subject codes (e.g. "HIND, ENG, MATH, SC, SLSC, DRGD" or "HGEN, ENG, PHYS, CHEM, BIO, MLSC"). Ignore trailing internal grading markers MSPE / MYSP.`,
     ].join('\n');
 
-    let parsedJson: {
-      centerCode?: string;
-      centerName?: string;
-      detectedClass?: string;
-      students?: Array<Partial<OcrStudentDto>>;
-    } | null = null;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let parsedJson: PageOcrPayload | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await ai.models.generateContent({
           model: 'gemini-4-hydrogen',
@@ -216,45 +224,69 @@ export async function extractStudentsFromUploadedDocument(
               {
                 inlineData: {
                   mimeType: 'application/pdf',
-                  data: Buffer.from(chunk.chunkBytes).toString('base64'),
+                  data: Buffer.from(page.pageBytes).toString('base64'),
                 },
               },
               { text: prompt },
             ],
           },
           config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             responseMimeType: 'application/json',
             responseSchema: EXTRACTION_SCHEMA,
           },
         });
 
-        parsedJson = JSON.parse((response.text ?? '{}').trim()) as {
-          centerCode?: string;
-          centerName?: string;
-          detectedClass?: string;
-          students?: Array<Partial<OcrStudentDto>>;
-        };
+        parsedJson = JSON.parse((response.text ?? '{}').trim()) as PageOcrPayload;
         break;
       } catch {
-        if (attempt === 1) {
-          failedPages.push(
-            chunk.startPage === chunk.endPage
-              ? `Page ${chunk.startPage}`
-              : `Pages ${chunk.startPage}-${chunk.endPage}`,
-          );
+        if (attempt < 2) {
+          await sleep(800 * Math.pow(2, attempt));
+        } else {
+          failedPages.push(`Page ${page.pageNumber}`);
         }
       }
     }
 
-    if (!parsedJson) continue;
+    pageResults[page.pageNumber - 1] = {
+      pageNumber: page.pageNumber,
+      payload: parsedJson,
+    };
+  };
 
-    if (parsedJson.centerCode && !centerCode) centerCode = parsedJson.centerCode.trim();
-    if (parsedJson.centerName && !centerName) centerName = parsedJson.centerName.trim();
-    if (parsedJson.detectedClass === '12' || parsedJson.detectedClass === '10') {
-      lastClassName = parsedJson.detectedClass;
+  // Bounded parallel batching (3 pages in flight at once) for speed + accuracy without flooding rate limits
+  const CONCURRENCY = 3;
+  for (let start = 0; start < pages.length; start += CONCURRENCY) {
+    const batch = pages.slice(start, start + CONCURRENCY);
+    await Promise.all(batch.map(extractSinglePage));
+  }
+
+  // Merge pages sequentially so clipped page headers cleanly inherit school & class metadata from previous page
+  const allStudents: OcrStudentDto[] = [];
+  const seenRolls = new Set<string>();
+  let centerCode = '';
+  let centerName = '';
+  let lastSchoolCode = defaultSchoolCode;
+  let lastSchoolName = '';
+  let lastClassName = fallbackClass;
+
+  for (const entry of pageResults) {
+    if (!entry || !entry.payload) continue;
+    const { pageNumber, payload } = entry;
+
+    if (payload.centerCode && !centerCode) centerCode = payload.centerCode.trim();
+    if (payload.centerName && !centerName) centerName = payload.centerName.trim();
+    if (payload.detectedClass === '12' || payload.detectedClass === '10') {
+      lastClassName = payload.detectedClass;
+    }
+    if (payload.schoolCode?.trim()) {
+      lastSchoolCode = payload.schoolCode.trim().toUpperCase();
+    }
+    if (payload.schoolName?.trim()) {
+      lastSchoolName = payload.schoolName.trim().toUpperCase();
     }
 
-    for (const s of parsedJson.students ?? []) {
+    for (const s of payload.students ?? []) {
       const roll = String(s.roll_no ?? '').replace(/\s+/g, '').trim().toUpperCase();
       if (roll && seenRolls.has(roll)) continue;
       if (roll) seenRolls.add(roll);
@@ -277,35 +309,25 @@ export async function extractStudentsFromUploadedDocument(
       const cls = rawCls.includes('12') ? '12' : rawCls.includes('10') ? '10' : lastClassName;
       lastClassName = cls;
 
-      const chunkRelPage = Number(s.sourcePage);
-      const absolutePage =
-        Number.isFinite(chunkRelPage) && chunkRelPage >= 1
-          ? chunk.startPage + chunkRelPage - 1
-          : chunk.startPage;
-
       allStudents.push({
         roll_no: roll,
         form_no: String(s.form_no ?? '').trim(),
         student_name: String(s.student_name ?? '').trim().toUpperCase(),
         mother_name: String(s.mother_name ?? '').trim().toUpperCase(),
         father_name: String(s.father_name ?? '').trim().toUpperCase(),
-        subjects: String(s.subjects ?? '')
-          .split(/[\s,;]+/)
-          .map((t) => t.trim().toUpperCase())
-          .filter(Boolean)
-          .join(', '),
+        subjects: cleanSubjectList(String(s.subjects ?? '')),
         registration_no: String(s.registration_no ?? '').trim(),
         schoolCode: scCode,
         schoolName: scName,
         className: cls,
         gender,
-        sourcePage: absolutePage,
+        sourcePage: pageNumber,
       });
     }
   }
 
   const uniqueSchools = new Set(allStudents.map((s) => s.schoolCode).filter(Boolean)).size;
-  const totalPages = chunks.reduce((max, c) => Math.max(max, c.endPage), 0);
+  const totalPages = pages.length;
   const failedNote =
     failedPages.length > 0 ? ` (${failedPages.join(', ')} could not be read — verify manually)` : '';
 

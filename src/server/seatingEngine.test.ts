@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { generateBoardSeating } from './seatingEngine.ts';
+import { allotTeachersToRooms, generateBoardSeating } from './seatingEngine.ts';
 import { SessionStore } from './store.ts';
 import { AdminAuthManager, verifySessionToken } from './auth.ts';
 import { studentTakesSubject } from '../utils/subjectNormalizer.ts';
@@ -14,7 +14,7 @@ import {
   parseStudentsFromText,
   parseTeachersFromText,
 } from '../utils/importParsers.ts';
-import type { Exam, OcrStudentDto, Room, Student } from '../types/seating.ts';
+import type { Exam, OcrStudentDto, Room, RoomSeatingReport, Student, Teacher } from '../types/seating.ts';
 
 function makeStudents(): Student[] {
   const schools = ['1011', '1045', '1070', '1129'];
@@ -1301,6 +1301,198 @@ test('LicenseManager verifies Ed25519 keys bound to Machine ID, handles 14-day t
   } finally {
     if (fs.existsSync(tmpLic)) fs.unlinkSync(tmpLic);
   }
+});
+
+test('allotTeachersToRooms pairs 1 HOST + 1 EXTERNAL, avoids subject conflict, prevents same-slot double booking, rotates across shifts, and tracks shortage', () => {
+  const makeRoomReport = (
+    roomNo: string,
+    examDate: string,
+    shift: 'MORNING' | 'EVENING',
+    subjects: string[],
+    totalStudents = 30,
+  ): RoomSeatingReport => ({
+    roomNo,
+    floor: 1,
+    rows: 6,
+    columns: 5,
+    capacity: 30,
+    totalStudents,
+    schools: ['1011', '1045'],
+    schoolNames: { '1011': 'SCHOOL 1011', '1045': 'SCHOOL 1045' },
+    classes: [12],
+    subjects,
+    genderMode: 'Mixed',
+    isDedicatedGirlsRoom: false,
+    isSparseMode: false,
+    allocationPattern: 'Top-2 School Pairing',
+    rollRanges: [],
+    matrixRows: [],
+    assignments: [
+      {
+        examId: 1,
+        examDate,
+        shift,
+        roomNo,
+        floor: 1,
+        rowNo: 1,
+        columnNo: 1,
+        seatLabel: '1-1',
+        rollNo: '2260001',
+        studentName: 'TEST STUDENT',
+        schoolCode: '1011',
+        schoolName: 'SCHOOL 1011',
+        className: 12,
+        gender: 'M',
+        subjectCode: subjects[0] ?? 'MATH',
+        isSparseMode: false,
+      },
+    ],
+  });
+
+  const nowIso = '2026-03-01T00:00:00.000Z';
+  const teachers: Teacher[] = [
+    { id: 1, name: 'MATH HOST', subject: 'MATH', schoolName: 'HOST', teacherType: 'HOST', createdAt: nowIso },
+    { id: 2, name: 'HIST HOST', subject: 'HIST', schoolName: 'HOST', teacherType: 'HOST', createdAt: nowIso },
+    { id: 3, name: 'MATH EXT', subject: 'MATH', schoolName: 'EXT', teacherType: 'EXTERNAL', createdAt: nowIso },
+    { id: 4, name: 'BIO EXT', subject: 'BIO', schoolName: 'EXT', teacherType: 'EXTERNAL', createdAt: nowIso },
+    { id: 5, name: 'GEN HOST', subject: 'GENERAL', schoolName: 'HOST', teacherType: 'HOST', createdAt: nowIso },
+    { id: 6, name: 'CIV EXT', subject: 'CIV', schoolName: 'EXT', teacherType: 'EXTERNAL', createdAt: nowIso },
+  ];
+
+  // Slot 1 has 2 rooms (one MATH, one BIO); Slot 2 has 1 room
+  const reports: RoomSeatingReport[] = [
+    makeRoomReport('R-101', '2026-03-01', 'MORNING', ['MATH'], 30),
+    makeRoomReport('R-102', '2026-03-01', 'MORNING', ['BIO'], 28),
+    makeRoomReport('R-101', '2026-03-02', 'MORNING', ['ENG'], 30),
+  ];
+
+  const result = allotTeachersToRooms(reports, teachers);
+  assert.equal(result.teachersAllotted, 6);
+  assert.equal(result.unfilledTeacherSlots, 0);
+
+  // Room 101 (MATH) must avoid MATH HOST (#1) and MATH EXT (#3) because conflict-free teachers exist
+  const r101Slot1 = reports[0].invigilators ?? [];
+  assert.equal(r101Slot1.length, 2);
+  assert.ok(r101Slot1.every((inv) => inv.subject !== 'MATH' && !inv.subjectConflict));
+  assert.notEqual(r101Slot1[0].teacherType, r101Slot1[1].teacherType, 'Must pair 1 HOST + 1 EXTERNAL');
+
+  // Room 102 (BIO) must avoid BIO EXT (#4) since other teachers exist
+  const r102Slot1 = reports[1].invigilators ?? [];
+  assert.equal(r102Slot1.length, 2);
+  assert.ok(r102Slot1.every((inv) => inv.subject !== 'BIO' && !inv.subjectConflict));
+  assert.notEqual(r102Slot1[0].teacherType, r102Slot1[1].teacherType, 'Must pair 1 HOST + 1 EXTERNAL');
+
+  // No teacher double-booked in Slot 1
+  const slot1TeacherIds = [...r101Slot1, ...r102Slot1].map((i) => i.teacherId);
+  const slot1Set = new Set(slot1TeacherIds);
+  assert.equal(slot1Set.size, 4, '4 distinct teachers allotted across 2 simultaneous rooms');
+
+  // Slot 2 should rotate in the 2 teachers who had 0 duties in Slot 1
+  const r101Slot2 = reports[2].invigilators ?? [];
+  assert.equal(r101Slot2.length, 2);
+  assert.ok(
+    r101Slot2.every((i) => !slot1Set.has(i.teacherId)),
+    'Previously unallotted teachers must be prioritized on next exam day',
+  );
+
+  // Shortage tracking: 3 simultaneous rooms in 1 slot (need 6), only 3 teachers available
+  const shortReports: RoomSeatingReport[] = [
+    makeRoomReport('R-101', '2026-03-05', 'MORNING', ['HIND'], 30),
+    makeRoomReport('R-102', '2026-03-05', 'MORNING', ['HIND'], 24),
+    makeRoomReport('R-103', '2026-03-05', 'MORNING', ['HIND'], 18),
+  ];
+  const shortRes = allotTeachersToRooms(shortReports, teachers.slice(0, 3));
+  assert.equal(shortRes.teachersAllotted, 3);
+  assert.equal(shortRes.unfilledTeacherSlots, 3);
+  assert.equal(shortReports[0].invigilators?.length, 1);
+  assert.equal(shortReports[1].invigilators?.length, 1);
+  assert.equal(shortReports[2].invigilators?.length, 1);
+});
+
+test('SessionStore persists Center Profile across restarts and strips MSPE/MYSP internal grading codes from dynamic subjects', () => {
+  const tmpDb = path.join(os.tmpdir(), `unnati-store-${Date.now()}.json`);
+  try {
+    const store1 = new SessionStore(tmpDb);
+    const updated = store1.saveProfile({
+      schoolName: 'Govt Inter College Hapur',
+      centerCode: '1099',
+      boardName: 'UP Board (Prayagraj)',
+      address: 'Delhi Road, Hapur',
+      principalName: 'Dr. R. K. Verma',
+      controllerName: 'S. K. Tyagi',
+      phone: '9876543210',
+    });
+    assert.equal(updated.schoolName, 'Govt Inter College Hapur');
+    assert.equal(updated.centerCode, '1099');
+
+    store1.importStudents(
+      '2026-27',
+      [
+        {
+          roll_no: '2265900101',
+          form_no: '101',
+          registration_no: '14109900101',
+          student_name: 'AMAN SHARMA',
+          mother_name: 'SUNITA DEVI',
+          father_name: 'RAMESH SHARMA',
+          subjects: 'HIND, ENG, MLSC, MSPE, MYSP, SUPW',
+          gender: 'M',
+          schoolCode: '1099',
+          className: '12',
+        },
+      ],
+      '1099',
+      '12',
+      'BOARD',
+    );
+
+    const store2 = new SessionStore(tmpDb);
+    const reloadedProfile = store2.getProfile();
+    assert.equal(reloadedProfile.schoolName, 'Govt Inter College Hapur');
+    assert.equal(reloadedProfile.centerCode, '1099');
+    assert.equal(reloadedProfile.controllerName, 'S. K. Tyagi');
+
+    const subjects = store2.getDynamicSubjects('2026-27', 'BOARD').map((s) => s.code);
+    assert.ok(subjects.includes('MLSC'), 'MLSC should be recognized as valid exam subject');
+    assert.ok(!subjects.includes('MSPE'), 'MSPE must be filtered out as internal grading marker');
+    assert.ok(!subjects.includes('MYSP'), 'MYSP must be filtered out as internal grading marker');
+    assert.ok(!subjects.includes('SUPW'), 'SUPW must be filtered out as internal grading marker');
+  } finally {
+    if (fs.existsSync(tmpDb)) fs.unlinkSync(tmpDb);
+  }
+});
+
+test('validateExtractedStudents flags clipped roll numbers via batch modal roll-length detection', () => {
+  const mkRow = (roll: string): OcrStudentDto => ({
+    roll_no: roll,
+    form_no: '1001',
+    registration_no: '1410110001',
+    student_name: 'RAHUL KUMAR',
+    mother_name: 'KAMLA DEVI',
+    father_name: 'SURESH KUMAR',
+    subjects: 'HIND, ENG, MATH',
+    gender: 'M',
+    schoolCode: '1011',
+    className: '10',
+    issues: [],
+  });
+
+  const batch = validateExtractedStudents([
+    mkRow('1260437001'),
+    mkRow('1260437002'),
+    mkRow('1260437003'),
+    mkRow('1260437004'),
+    mkRow('1260437005'),
+    mkRow('260437006'), // 9 digits instead of modal 10 digits (clipped leading digit)
+  ]);
+
+  assert.equal(batch.errorRows, 0);
+  assert.equal(batch.warningRows, 1);
+  const clippedIssues = batch.rows[5].issues ?? [];
+  assert.equal(clippedIssues.length, 1);
+  assert.equal(clippedIssues[0].field, 'roll_no');
+  assert.equal(clippedIssues[0].severity, 'warning');
+  assert.match(clippedIssues[0].message, /9 digits.*10/);
 });
 
 

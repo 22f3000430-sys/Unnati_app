@@ -168,6 +168,41 @@ async function startServer() {
   });
 
   // =====================================
+  // CENTER PROFILE
+  // =====================================
+  app.get('/api/profile', (_req, res) => {
+    res.json({
+      profile: store.getProfile(),
+      license: licenseManager.getStatus(),
+    });
+  });
+
+  app.post('/api/profile', (req, res) => {
+    const lic = licenseManager.getStatus();
+    if (!lic.writeAllowed) {
+      res.status(403).json({ error: `License required: ${lic.message}` });
+      return;
+    }
+    const body = req.body ?? {};
+    const schoolName = String(body.schoolName ?? '').trim();
+    if (!schoolName) {
+      res.status(400).json({ error: 'School / Center Name is required.' });
+      return;
+    }
+    const saved = store.saveProfile({
+      schoolName,
+      centerCode: String(body.centerCode ?? ''),
+      boardName: String(body.boardName ?? ''),
+      principalName: String(body.principalName ?? ''),
+      controllerName: String(body.controllerName ?? ''),
+      phone: String(body.phone ?? ''),
+      email: String(body.email ?? ''),
+      address: String(body.address ?? ''),
+    });
+    res.json({ profile: saved, license: lic });
+  });
+
+  // =====================================
   // SESSIONS
   // =====================================
   app.get('/api/sessions', (_req, res) => {
@@ -554,6 +589,7 @@ async function startServer() {
       session.rooms,
       (cls, subj) => store.getStudentsForExam(sessionYear, cls, subj, moduleType),
       options,
+      session.teachers,
     );
 
     res.json(preview);
@@ -598,7 +634,13 @@ async function startServer() {
     const prefix = moduleType === 'SCHOOL' ? 'PreBoardPlan' : 'BoardPlan';
     const fileName = `${prefix}_${sessionYear}_${compactDate}_${shift}.pdf`;
 
-    const roomReports = buildRoomReports(assignments, session.rooms, girlsRoomIds, patternMap);
+    const roomReports = buildRoomReports(
+      assignments,
+      session.rooms,
+      girlsRoomIds,
+      patternMap,
+      session.teachers,
+    );
     const reportRecord = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       sessionYear,
@@ -609,6 +651,7 @@ async function startServer() {
       shift,
       totalRooms: roomReports.length,
       totalStudents: assignments.length,
+      centerProfile: store.getProfile(),
       roomReports,
     };
 
