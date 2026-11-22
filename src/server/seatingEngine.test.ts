@@ -9,6 +9,11 @@ import { AdminAuthManager, verifySessionToken } from './auth.ts';
 import { studentTakesSubject } from '../utils/subjectNormalizer.ts';
 import { validateExtractedStudents } from '../utils/studentValidation.ts';
 import {
+  detectModalNumericRollLength,
+  doesPageNeedHighAccuracyRetry,
+  scorePagePayload,
+} from './pdfExtractor.ts';
+import {
   parseExamsFromText,
   parseRoomsFromText,
   parseStudentsFromText,
@@ -1495,6 +1500,96 @@ test('validateExtractedStudents flags clipped roll numbers via batch modal roll-
   assert.match(clippedIssues[0].message, /9 digits.*10/);
 });
 
+test('validateExtractedStudents reconstructs clipped leading roll digit and flags mid-sequence jump', () => {
+  const mkRow = (roll: string): OcrStudentDto => ({
+    roll_no: roll,
+    form_no: '1001',
+    registration_no: '1410110001',
+    student_name: 'ANJALI SHARMA',
+    mother_name: 'MEERA DEVI',
+    father_name: 'RAKESH SHARMA',
+    subjects: 'HIND, ENG, MATH',
+    gender: 'F',
+    schoolCode: '1011',
+    className: '10',
+    issues: [],
+  });
 
+  const batch = validateExtractedStudents([
+    mkRow('1260441630'),
+    mkRow('1260441631'),
+    mkRow('1260441632'),
+    mkRow('260441633'), // Leading '1' clipped off scan margin (real Class 10 Page 9 edge case)
+    mkRow('1260441634'),
+    mkRow('1260449635'), // Mid-sequence 1-digit jump between 1260441634 and 1260441636
+    mkRow('1260441636'),
+  ]);
 
+  assert.equal(batch.errorRows, 0);
+  assert.equal(batch.warningRows, 2);
+  assert.equal(batch.rows[3].suggestedRollNo, '1260441633');
+  assert.equal(batch.rows[5].suggestedRollNo, '1260441635');
+  assert.ok(batch.rows[5].issues?.some((i) => /sequence jumps/i.test(i.message)));
+});
 
+test('pdfExtractor Pass 2 escalation detects empty/clipped/missing-gender pages and scores higher-quality retries', () => {
+  const mkStudent = (roll: string, gender = '1', name = 'AARAV SHARMA', subjects = 'HIND, ENG') => ({
+    roll_no: roll,
+    student_name: name,
+    gender,
+    subjects,
+  });
+
+  const cleanPage = {
+    students: [
+      mkStudent('1260441631'),
+      mkStudent('1260441632'),
+      mkStudent('1260441633'),
+      mkStudent('1260441634'),
+      mkStudent('1260441635'),
+    ],
+  };
+
+  const clippedPage = {
+    students: [
+      mkStudent('1260441631'),
+      mkStudent('260441632'),
+      mkStudent('1260441633'),
+      mkStudent('1260441634'),
+      mkStudent('1260441635'),
+    ],
+  };
+
+  const modalLen = detectModalNumericRollLength([cleanPage, clippedPage]);
+  assert.equal(modalLen, 10);
+
+  assert.equal(doesPageNeedHighAccuracyRetry(cleanPage, modalLen), null);
+  assert.match(doesPageNeedHighAccuracyRetry({ students: [] }, modalLen) ?? '', /0 rows/);
+  assert.match(doesPageNeedHighAccuracyRetry(clippedPage, modalLen) ?? '', /clipped leading digit/);
+  assert.match(
+    doesPageNeedHighAccuracyRetry(
+      {
+        students: [
+          mkStudent('1260441631', ''),
+          mkStudent('1260441632'),
+          mkStudent('1260441633'),
+          mkStudent('1260441634'),
+          mkStudent('1260441635'),
+        ],
+      },
+      modalLen,
+    ) ?? '',
+    /missing S X/,
+  );
+
+  // Page with <5 rows is fine if it carries a SCHOOL WISE footer
+  assert.equal(
+    doesPageNeedHighAccuracyRetry(
+      { summaryTotal: 15, students: [mkStudent('1260441631'), mkStudent('1260441632')] },
+      modalLen,
+    ),
+    null,
+  );
+
+  assert.ok(scorePagePayload(cleanPage, modalLen) > scorePagePayload(clippedPage, modalLen));
+});

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type {
   OcrStudentDto,
+  SchoolExtractionSummary,
   SeatingModuleType,
   Student,
   SubjectItemDto,
@@ -97,6 +98,8 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
   const [extractedRows, setExtractedRows] = useState<OcrStudentDto[]>([]);
   const [extractStatus, setExtractStatus] = useState<string | null>(null);
   const [failedPages, setFailedPages] = useState<string[]>([]);
+  const [schoolSummaries, setSchoolSummaries] = useState<SchoolExtractionSummary[]>([]);
+  const [retriedPages, setRetriedPages] = useState<number>(0);
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [detectedCenter, setDetectedCenter] = useState<{
     code?: string;
@@ -127,6 +130,8 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
     setExtractedRows([]);
     setExtractStatus(null);
     setFailedPages([]);
+    setSchoolSummaries([]);
+    setRetriedPages(0);
     setShowFlaggedOnly(false);
   }, [isSchoolMode, defaultForm]);
 
@@ -298,6 +303,8 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
     setIsExtracting(true);
     setExtractStatus(null);
     setFailedPages([]);
+    setSchoolSummaries([]);
+    setRetriedPages(0);
     setDetectedCenter(null);
     setShowFlaggedOnly(false);
     try {
@@ -313,7 +320,9 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
         centerCode?: string;
         centerName?: string;
         pagesProcessed?: number;
+        retriedPages?: number;
         failedPages?: string[];
+        schoolSummaries?: SchoolExtractionSummary[];
         message: string;
         students: OcrStudentDto[];
       }>(`/api/ocr/extract?module=${moduleType}&forceAi=${useAi ? 'true' : 'false'}`, sessionYear, {
@@ -324,6 +333,8 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
       setExtractedRows(res.students ?? []);
       setExtractStatus(res.message);
       setFailedPages(res.failedPages ?? []);
+      setSchoolSummaries(res.schoolSummaries ?? []);
+      setRetriedPages(res.retriedPages ?? 0);
       if (res.centerCode || res.centerName || res.pagesProcessed || res.method) {
         setDetectedCenter({
           code: res.centerCode,
@@ -384,6 +395,8 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
       setSelectedFile(null);
       setExtractStatus(null);
       setFailedPages([]);
+      setSchoolSummaries([]);
+      setRetriedPages(0);
       setDetectedCenter(null);
       await loadStudents();
       onDataChanged();
@@ -740,34 +753,87 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
             </div>
 
             {!isSchoolMode && (
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={forceAiVision}
-                  onChange={(e) => setForceAiVision(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-[#0F766E] rounded"
-                />
-                <span>
-                  Use AI Vision OCR for PDFs (recommended for scanned or rotated UP Board Nominal Rolls)
-                </span>
-              </label>
+              <div className="space-y-1.5">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceAiVision}
+                    onChange={(e) => setForceAiVision(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[#0F766E] rounded"
+                  />
+                  <span>
+                    Use AI Vision OCR for PDFs (recommended for scanned or rotated UP Board Nominal Rolls)
+                  </span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Best accuracy tip: Press pages flat so the left ROLL-NO margin isn&apos;t clipped, avoid adjacent-page bleed, and upload 10–15 page batches.
+                </p>
+              </div>
             )}
 
             {extractStatus && (
-              <div className="rounded-lg border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950/50 px-4 py-2.5 text-xs text-teal-900 dark:text-teal-200 space-y-1">
+              <div className="rounded-lg border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950/50 px-4 py-3 text-xs text-teal-900 dark:text-teal-200 space-y-2">
                 <div className="font-medium">{extractStatus}</div>
-                {(detectedCenter?.code || detectedCenter?.pages || detectedCenter?.method) && (
-                  <div>
-                    {detectedCenter.method && (
-                      <span className="font-mono uppercase mr-2">[{detectedCenter.method}]</span>
+                {(detectedCenter?.code || detectedCenter?.pages || detectedCenter?.method || retriedPages > 0) && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {detectedCenter?.method && (
+                      <span className="font-mono uppercase">[{detectedCenter.method}]</span>
                     )}
-                    {detectedCenter.code && (
+                    {detectedCenter?.code && (
                       <span>
                         Center: <strong className="font-mono">{detectedCenter.code}</strong>{' '}
                         {detectedCenter.name}
                       </span>
                     )}
-                    {detectedCenter.pages ? ` · ${detectedCenter.pages} page(s)` : ''}
+                    {detectedCenter?.pages ? <span>{detectedCenter.pages} page(s)</span> : null}
+                    {retriedPages > 0 && (
+                      <span className="font-semibold text-teal-800 dark:text-teal-300">
+                        · {retriedPages} page(s) auto-rechecked in High Precision
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {schoolSummaries.length > 0 && (
+                  <div className="pt-1 border-t border-teal-200/80 dark:border-teal-800/70">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-teal-800 dark:text-teal-300 mb-1.5">
+                      School-Wise Reconciliation
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {schoolSummaries.map((sc) => {
+                        const hasPrinted = typeof sc.printedTotal === 'number' && sc.printedTotal > 0;
+                        const isMatch = hasPrinted && sc.extractedCount === sc.printedTotal;
+                        const isMismatch = hasPrinted && sc.extractedCount !== sc.printedTotal;
+                        return (
+                          <div
+                            key={sc.schoolCode}
+                            className={`rounded-md border px-2.5 py-1 text-[11px] font-mono tabular-nums ${
+                              isMismatch
+                                ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200'
+                                : 'border-teal-300 dark:border-teal-700 bg-white/80 dark:bg-[#0D1615] text-[#111C1B] dark:text-[#EDF4F2]'
+                            }`}
+                          >
+                            <span className="font-bold">Sch {sc.schoolCode}</span>:{' '}
+                            <span>{sc.extractedCount} extracted</span>
+                            <span className="text-slate-500 dark:text-slate-400">
+                              {' '}
+                              ({sc.maleCount}M/{sc.femaleCount}F)
+                            </span>
+                            {hasPrinted && (
+                              <span
+                                className={`ml-1.5 font-semibold ${
+                                  isMatch
+                                    ? 'text-emerald-700 dark:text-emerald-400'
+                                    : 'text-amber-700 dark:text-amber-300'
+                                }`}
+                              >
+                                · Printed {sc.printedTotal} {isMatch ? '✓' : '⚠ Check'}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1032,14 +1098,14 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
                               }`}
                             />
                           </td>
-                          <td className="px-3 py-2 text-xs min-w-[180px]">
+                          <td className="px-3 py-2 text-xs min-w-[200px]">
                             {issues.length === 0 ? (
                               <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
                                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                                 Ready{row.sourcePage ? ` · Pg ${row.sourcePage}` : ''}
                               </span>
                             ) : (
-                              <div className="space-y-0.5">
+                              <div className="space-y-1">
                                 {issues.map((issue, iIdx) => (
                                   <div
                                     key={iIdx}
@@ -1052,6 +1118,21 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
                                     • {issue.message}
                                   </div>
                                 ))}
+                                {row.suggestedRollNo && row.suggestedRollNo !== row.roll_no && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExtractedRows((prev) =>
+                                        prev.map((r, i) =>
+                                          i === idx ? { ...r, roll_no: row.suggestedRollNo! } : r,
+                                        ),
+                                      )
+                                    }
+                                    className="mt-1 inline-flex items-center gap-1 rounded border border-teal-600/50 dark:border-teal-500/50 bg-teal-50 dark:bg-teal-950/60 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-900/70 cursor-pointer"
+                                  >
+                                    Fix → {row.suggestedRollNo}
+                                  </button>
+                                )}
                               </div>
                             )}
                           </td>

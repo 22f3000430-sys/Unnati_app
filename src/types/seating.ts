@@ -267,7 +267,19 @@ export interface OcrStudentDto {
   className: string;
   gender: string;
   issues?: OcrStudentIssue[];
+  suggestedRollNo?: string;
   sourcePage?: number;
+}
+
+export interface SchoolExtractionSummary {
+  schoolCode: string;
+  schoolName: string;
+  extractedCount: number;
+  maleCount: number;
+  femaleCount: number;
+  printedTotal?: number;
+  printedMale?: number;
+  printedFemale?: number;
 }
 
 export interface AuthStatusResponse {

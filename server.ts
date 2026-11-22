@@ -748,7 +748,9 @@ async function startServer() {
         centerCode: result.centerCode,
         centerName: result.centerName,
         pagesProcessed: result.pagesProcessed,
+        retriedPages: result.retriedPages ?? 0,
         failedPages: result.failedPages,
+        schoolSummaries: result.schoolSummaries ?? [],
         message: result.message,
         students: validation.rows,
         validationSummary: {
