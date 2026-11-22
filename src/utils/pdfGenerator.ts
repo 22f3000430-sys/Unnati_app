@@ -5,6 +5,7 @@ export function buildSeatingPlanPdf(
   reports: RoomSeatingReport[],
   examDate: string,
   shift: string,
+  sessionYear?: string,
 ): jsPDF {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -20,27 +21,47 @@ export function buildSeatingPlanPdf(
     let y = margin + 12;
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
+    doc.setFontSize(17);
     doc.setTextColor(15, 23, 42);
-    doc.text('BOARD EXAM SEATING PLAN', margin, y);
-    y += 20;
+    doc.text('UNNATI EXAM APP — SEATING PLAN', margin, y);
+    if (sessionYear) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Session ${sessionYear}`, pageWidth - margin, y, { align: 'right' });
+    }
+    y += 18;
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setTextColor(30, 41, 59);
     doc.text(`Date: ${examDate}   |   Shift: ${shift}`, margin, y);
-    y += 15;
-    doc.text(`Room: ${report.roomNo}   |   Floor: ${report.floor}   |   Students: ${report.totalStudents}`, margin, y);
-    y += 15;
-    doc.text(`Schools: ${report.schools.join(', ')}`, margin, y);
     y += 14;
+
+    const roomType = report.isDedicatedGirlsRoom
+      ? `${report.genderMode} (Dedicated)`
+      : report.genderMode;
+    doc.text(
+      `Room: ${report.roomNo}   |   Floor: ${report.floor}   |   Occupied: ${report.totalStudents}/${report.capacity}   |   Allocation: ${roomType}`,
+      margin,
+      y,
+    );
+    y += 14;
+    doc.text(
+      `Classes: ${report.classes.map((c) => `Class ${c}`).join(', ')}   |   Subjects: ${report.subjects.join(', ')}`,
+      margin,
+      y,
+    );
+    y += 14;
+    doc.text(`Schools: ${report.schools.join(', ')}   |   Pattern: ${report.allocationPattern}`, margin, y);
+    y += 13;
 
     for (const range of report.rollRanges) {
       doc.text(range, margin, y);
-      y += 13;
+      y += 12;
     }
 
-    y += 8;
+    y += 6;
 
     const cols = Math.max(report.columns, 1);
     const cellWidth = contentWidth / cols;
@@ -54,8 +75,8 @@ export function buildSeatingPlanPdf(
 
       row.cells.forEach((cell, colIdx) => {
         const x = margin + colIdx * cellWidth;
-        doc.setDrawColor(30, 41, 59);
-        doc.setLineWidth(0.75);
+        doc.setDrawColor(51, 65, 85);
+        doc.setLineWidth(0.7);
         doc.rect(x, y, cellWidth, cellHeight);
 
         if (cell.isEmpty) {
@@ -70,10 +91,10 @@ export function buildSeatingPlanPdf(
           doc.text(cell.rollNo, x + 5, y + 14);
 
           doc.setFont('helvetica', 'normal');
-          doc.setFontSize(8);
+          doc.setFontSize(7.8);
           doc.setTextColor(51, 65, 85);
           doc.text(`${cell.schoolCode} (${cell.gender})`, x + 5, y + 26);
-          doc.text(`Class ${cell.className}`, x + 5, y + 38);
+          doc.text(`Cl ${cell.className} · ${cell.subjectCode}`, x + 5, y + 38);
         }
       });
 
@@ -81,9 +102,9 @@ export function buildSeatingPlanPdf(
     }
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, pageHeight - 18, {
+    doc.text(`Unnati Exam App · Generated: ${new Date().toLocaleString()}`, pageWidth / 2, pageHeight - 18, {
       align: 'center',
     });
   });
@@ -96,18 +117,20 @@ export function downloadSeatingPlanPdf(
   examDate: string,
   shift: string,
   fileName?: string,
+  sessionYear?: string,
 ) {
-  const doc = buildSeatingPlanPdf(reports, examDate, shift);
+  const doc = buildSeatingPlanPdf(reports, examDate, shift, sessionYear);
   const compactDate = examDate.replace(/-/g, '');
-  doc.save(fileName || `FullPlan_${compactDate}_${shift}.pdf`);
+  doc.save(fileName || `SeatingPlan_${compactDate}_${shift}.pdf`);
 }
 
 export function getSeatingPlanPdfUrl(
   reports: RoomSeatingReport[],
   examDate: string,
   shift: string,
+  sessionYear?: string,
 ): string {
-  const doc = buildSeatingPlanPdf(reports, examDate, shift);
+  const doc = buildSeatingPlanPdf(reports, examDate, shift, sessionYear);
   const blob = doc.output('blob');
   return URL.createObjectURL(blob);
 }

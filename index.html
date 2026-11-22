@@ -3,18 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Seating App</title>
+    <title>Unnati Exam App — Board &amp; Pre-Board Seating</title>
     <meta
       name="description"
-      content="Board examination seating arrangement generator, room & exam manager, student OCR extraction importer, and PDF seating plan reporter."
+      content="Unnati Exam App: Anti-cheating Board & Pre-Board examination seating generator, isolated session manager, roll lookup, and PDF reports."
     />
-    <meta property="og:title" content="Seating App" />
+    <meta property="og:title" content="Unnati Exam App — Board &amp; Pre-Board Seating" />
     <meta
       property="og:description"
-      content="Board examination seating arrangement generator, room & exam manager, student OCR extraction importer, and PDF seating plan reporter."
+      content="Unnati Exam App: Anti-cheating Board & Pre-Board examination seating generator, isolated session manager, roll lookup, and PDF reports."
     />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230F766E'/%3E%3Cpath d='M18 18v18c0 7.7 6.3 14 14 14s14-6.3 14-14V18h-7v18c0 3.9-3.1 7-7 7s-7-3.1-7-7V18h-7z' fill='%23FAF9F5'/%3E%3Cpath d='M24 22l8-8 8 8h-5v10h-6V22h-5z' fill='%23F59E0B'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      try {
+        if (localStorage.getItem('unnati-theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
-  <body class="bg-[#F1F5F9] text-[#0F172A] antialiased">
+  <body class="bg-[#EAE7DE] text-[#111C1B] dark:bg-[#080F0E] dark:text-[#EDF4F2] antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

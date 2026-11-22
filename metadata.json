@@ -1,5 +1,8 @@
 {
   "name": "Seating App",
   "description": "Board examination seating arrangement generator, room & exam manager, student OCR extraction importer, and PDF seating plan reporter.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

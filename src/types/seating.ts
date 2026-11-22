@@ -1,3 +1,5 @@
+export type SeatingModuleType = 'BOARD' | 'SCHOOL';
+
 export interface Student {
   id: number;
   rollNo: string;
@@ -9,6 +11,7 @@ export interface Student {
   subjects: string;
   gender: 'M' | 'F';
   schoolCode: string;
+  schoolName?: string;
   className: number;
 }
 
@@ -42,13 +45,17 @@ export interface Teacher {
   subject: string;
   schoolName: string;
   teacherType: 'HOST' | 'EXTERNAL';
+  phone?: string;
   createdAt: string;
 }
 
 export interface StudentSchoolClassDto {
   schoolCode: string;
+  schoolName: string;
   className: number;
   totalStudents: number;
+  boysCount: number;
+  girlsCount: number;
 }
 
 export interface ExamSummaryDto {
@@ -56,21 +63,38 @@ export interface ExamSummaryDto {
   shift: string;
   className: number;
   subjectCode: string;
+  status: 'Done' | 'Today' | 'Upcoming';
 }
 
 export interface DashboardMetricsDto {
   totalStudents: number;
+  totalClass10: number;
+  totalClass12: number;
+  totalSchools: number;
+  preBoardStudents: number;
+  preBoardExams: number;
   totalRooms: number;
+  totalCapacity: number;
   hostTeachers: number;
   externalTeachers: number;
   subjects10: number;
   subjects12: number;
+  reportsCount: number;
+}
+
+export interface ReadinessAlert {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
 }
 
 export interface DashboardResponse {
+  sessionYear: string;
+  todayDate: string;
   metrics: DashboardMetricsDto;
   schoolSummary: StudentSchoolClassDto[];
   examSummary: ExamSummaryDto[];
+  readinessAlerts?: ReadinessAlert[];
 }
 
 export interface ExamSelectionDto {
@@ -80,16 +104,33 @@ export interface ExamSelectionDto {
   className: number;
   subjectCode: string;
   studentsCount: number;
+  boysCount: number;
+  girlsCount: number;
   displayText: string;
 }
 
+export type TailRoomPolicy =
+  | 'strict_separate'
+  | 'rebalance_only'
+  | 'cross_class_tail'
+  | 'smart_tail_absorb'
+  | 'buffer_gender_merge';
+
 export interface SeatingGenerationOptions {
+  moduleType: SeatingModuleType;
   mixClasses: boolean;
   mixGenders: boolean;
+  dedicatedGirlsRoomsEnabled: boolean;
+  girlsRoomIds: number[];
+  seatingDensity: 'auto' | 'dense' | 'sparse';
+  tailRoomPolicy?: TailRoomPolicy;
+  schoolFilter?: string[]; // Optional filter for School/Pre-Board mode
+  schoolModeStrategy?: 'alternate_single' | 'dual_class_interleave';
 }
 
 export interface SeatAssignment {
   id?: number;
+  moduleType?: SeatingModuleType;
   examDate: string;
   shift: string;
   examId: number;
@@ -103,6 +144,7 @@ export interface SeatAssignment {
   className: number;
   gender: string;
   schoolCode: string;
+  schoolName?: string;
   subjectCode: string;
   isSparseMode: boolean;
 }
@@ -114,8 +156,10 @@ export interface SeatMatrixCell {
   rollNo: string;
   studentName: string;
   schoolCode: string;
+  schoolName?: string;
   className: number;
   gender: string;
+  subjectCode: string;
 }
 
 export interface SeatMatrixRow {
@@ -128,23 +172,60 @@ export interface RoomSeatingReport {
   floor: number;
   rows: number;
   columns: number;
+  capacity: number;
   totalStudents: number;
+  genderMode: 'Girls Only' | 'Boys Only' | 'Mixed';
+  allocationPattern:
+    | 'Top-2 School Pairing'
+    | 'Single-School Alternate'
+    | 'Dual-Class Interleave'
+    | 'Alternate Checkerboard'
+    | 'Cross-Class Tail Absorb'
+    | 'Gender-Buffered Tail';
+  isDedicatedGirlsRoom: boolean;
+  isSparseMode: boolean;
   schools: string[];
+  schoolNames: Record<string, string>;
+  classes: number[];
+  subjects: string[];
   rollRanges: string[];
   assignments: SeatAssignment[];
   matrixRows: SeatMatrixRow[];
 }
 
 export interface BoardSeatingPreviewResponse {
+  moduleType: SeatingModuleType;
   assignments: SeatAssignment[];
   roomReports: RoomSeatingReport[];
+  pairingLog: string[];
+  unseatedRollNos?: string[];
+  relaxedSpacingUsed?: boolean;
   summary: {
     totalExams: number;
     totalStudents: number;
     totalRooms: number;
+    totalAvailableRooms: number;
     totalSeats: number;
+    totalCapacityUsedRooms: number;
+    utilizationPercent: number;
     unseatedStudents: number;
+    orthogonalConflicts: number;
+    diagonalConflicts: number;
+    teachersRequired: number;
   };
+}
+
+export interface OcrStudentIssue {
+  field:
+    | 'roll_no'
+    | 'student_name'
+    | 'gender'
+    | 'className'
+    | 'schoolCode'
+    | 'subjects'
+    | 'duplicate';
+  severity: 'error' | 'warning';
+  message: string;
 }
 
 export interface OcrStudentDto {
@@ -156,12 +237,46 @@ export interface OcrStudentDto {
   subjects: string;
   registration_no: string;
   schoolCode: string;
+  schoolName?: string;
   className: string;
   gender: string;
+  issues?: OcrStudentIssue[];
+  sourcePage?: number;
+}
+
+export interface AuthStatusResponse {
+  configured: boolean;
+  envManaged: boolean;
+  authenticated: boolean;
+}
+
+export type LicensePlan = 'TRIAL' | 'ANNUAL' | 'PERPETUAL';
+
+export type LicenseStatusCode =
+  | 'LICENSED'
+  | 'TRIAL_ACTIVE'
+  | 'EXPIRED'
+  | 'MACHINE_MISMATCH'
+  | 'CLOCK_TAMPERED';
+
+export interface LicenseStatusResponse {
+  machineId: string;
+  status: LicenseStatusCode;
+  writeAllowed: boolean;
+  plan: LicensePlan;
+  schoolName: string;
+  centerCode: string;
+  issuedAt: string;
+  expiresAt: string | null;
+  daysRemaining: number | null;
+  lastSeenAt: string;
+  message: string;
 }
 
 export interface GeneratedReportFile {
   id: string;
+  sessionYear: string;
+  moduleType: SeatingModuleType;
   fileName: string;
   createdAt: string;
   examDate: string;
@@ -169,4 +284,32 @@ export interface GeneratedReportFile {
   totalRooms: number;
   totalStudents: number;
   roomReports: RoomSeatingReport[];
+}
+
+export interface StudentLookupResult {
+  moduleType: SeatingModuleType;
+  student: Student;
+  assignments: Array<
+    SeatAssignment & {
+      roomRows: number;
+      roomColumns: number;
+    }
+  >;
+}
+
+export interface SessionData {
+  students: Student[]; // Board Exam Center nominal roll
+  schoolStudents: Student[]; // Isolated Pre-Board / Internal school candidates
+  rooms: Room[];
+  exams: Exam[]; // Board Exam datesheet
+  schoolExams: Exam[]; // Isolated Pre-Board datesheet
+  teachers: Teacher[];
+  seatAssignments: SeatAssignment[];
+  reports: GeneratedReportFile[];
+  nextStudentId: number;
+  nextSchoolStudentId: number;
+  nextRoomId: number;
+  nextExamId: number;
+  nextSchoolExamId: number;
+  nextTeacherId: number;
 }
