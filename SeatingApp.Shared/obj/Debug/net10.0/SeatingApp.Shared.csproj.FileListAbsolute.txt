@@ -1,0 +1,12 @@
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\bin\Debug\net10.0\SeatingApp.Shared.deps.json
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\bin\Debug\net10.0\SeatingApp.Shared.dll
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\bin\Debug\net10.0\SeatingApp.Shared.pdb
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.AssemblyInfoInputs.cache
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.AssemblyInfo.cs
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.csproj.CoreCompileInputs.cache
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.sourcelink.json
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.dll
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\refint\SeatingApp.Shared.dll
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\SeatingApp.Shared.pdb
+C:\Users\TARUN SHARMA\SeatingApp\SeatingApp.Shared\obj\Debug\net10.0\ref\SeatingApp.Shared.dll

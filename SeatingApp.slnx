@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="SeatingApp.Application/SeatingApp.Application.csproj" />
+  <Project Path="SeatingApp.Domain/SeatingApp.Domain.csproj" />
+  <Project Path="SeatingApp.Infrastructure/SeatingApp.Infrastructure.csproj" />
+  <Project Path="SeatingApp.Presentation/SeatingApp.Presentation.csproj" />
+  <Project Path="SeatingApp.Shared/SeatingApp.Shared.csproj" />
+</Solution>
