@@ -1,0 +1,5 @@
+{
+  "name": "Seating App",
+  "description": "Board examination seating arrangement generator, room & exam manager, student OCR extraction importer, and PDF seating plan reporter.",
+  "requestFramePermissions": []
+}
