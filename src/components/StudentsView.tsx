@@ -753,7 +753,7 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
             </div>
 
             {!isSchoolMode && (
-              <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                   <input
                     type="checkbox"
@@ -761,13 +761,11 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
                     onChange={(e) => setForceAiVision(e.target.checked)}
                     className="h-3.5 w-3.5 accent-[#0F766E] rounded"
                   />
-                  <span>
-                    Force AI Vision OCR for all pages (leave unchecked for Auto-Detect: instant parsing for portal soft-copy PDFs, AI Vision for scanned sheets)
-                  </span>
+                  <span>Force AI Vision OCR (default auto-parses soft-copy PDFs)</span>
                 </label>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Tip: Portal soft-copy PDFs parse deterministically in &lt;1s with zero AI cost. For scanned sheets, keep left ROLL-NO margin unclipped and upload 10–15 page batches.
-                </p>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Soft-copy PDFs parse in &lt;1s · Scanned PDFs: 10–15 pages/batch
+                </span>
               </div>
             )}
 

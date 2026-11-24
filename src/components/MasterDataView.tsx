@@ -8,7 +8,7 @@ import type {
   Teacher,
 } from '../types/seating.ts';
 import { apiFetch, downloadTextFile } from '../utils/api.ts';
-import { normalizeSubjectToken } from '../utils/subjectNormalizer.ts';
+import { extractSubjectCode } from '../utils/subjectNormalizer.ts';
 
 export type MasterTab = 'rooms' | 'exams' | 'teachers';
 
@@ -297,7 +297,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
       {activeTab === 'exams' && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#D8D4CA] dark:border-[#213331] bg-card-textured px-4 py-3 shadow-xs">
           <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-            Datesheet Scope (100% Isolated):
+            Datesheet Scope:
           </span>
           <div className="inline-flex rounded-lg border border-[#D8D4CA] dark:border-[#213331] bg-[#FAF9F5] dark:bg-[#0D1615] p-1">
             <button
@@ -351,8 +351,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                   },
                 ]);
               } else if (activeTab === 'exams') {
-                const defaultSub =
-                  subjects.find((s) => s.className === 10)?.code ?? subjects[0]?.code ?? '';
                 setExams((prev) => [
                   ...prev,
                   {
@@ -360,7 +358,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                     examDate: new Date().toISOString().slice(0, 10),
                     shift: 'MORNING',
                     className: 10,
-                    subjectCode: defaultSub,
+                    subjectCode: '',
                   },
                 ]);
               } else {
@@ -555,7 +553,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                   <th className="px-4 py-3">Exam Date</th>
                   <th className="px-4 py-3">Shift</th>
                   <th className="px-4 py-3">Class</th>
-                  <th className="px-4 py-3">Subject</th>
+                  <th className="px-4 py-3">
+                    Subject{' '}
+                    <span className="font-normal normal-case tracking-normal text-[11px] text-slate-400 dark:text-slate-500">
+                      (Format: CODE-SUBJECT, e.g. SC-SCIENCE)
+                    </span>
+                  </th>
                   <th className="px-4 py-3 text-right">Remove</th>
                 </tr>
               </thead>
@@ -569,12 +572,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                   </tr>
                 ) : (
                   exams.map((exam, idx) => {
+                    const extractedCode = extractSubjectCode(exam.subjectCode);
                     const classSubjects = subjects.filter((s) => s.className === exam.className);
-                    const canonicalCode = normalizeSubjectToken(exam.subjectCode);
-                    const matchedSubject = classSubjects.find(
-                      (s) => s.code === exam.subjectCode || s.code === canonicalCode,
-                    );
-                    const hasExactSubject = Boolean(matchedSubject);
+                    const matchedSubject = extractedCode
+                      ? classSubjects.find((s) => s.code === extractedCode)
+                      : undefined;
+                    const matchedCount = matchedSubject?.count ?? 0;
                     return (
                       <tr key={exam.id} className="hover:bg-[#FAF9F5] dark:hover:bg-[#162523]">
                         <td className="px-4 py-2.5">
@@ -619,13 +622,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                             value={exam.className}
                             onChange={(e) => {
                               const nextClass = Number(e.target.value) === 12 ? 12 : 10;
-                              const firstSub =
-                                subjects.find((s) => s.className === nextClass)?.code ?? '';
                               setExams((prev) =>
                                 prev.map((ex, i) =>
-                                  i === idx
-                                    ? { ...ex, className: nextClass, subjectCode: firstSub }
-                                    : ex,
+                                  i === idx ? { ...ex, className: nextClass } : ex,
                                 ),
                               );
                             }}
@@ -637,36 +636,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                           </select>
                         </td>
                         <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={matchedSubject ? matchedSubject.code : '__CUSTOM__'}
-                              onChange={(e) => {
-                                if (e.target.value !== '__CUSTOM__') {
-                                  setExams((prev) =>
-                                    prev.map((ex, i) =>
-                                      i === idx ? { ...ex, subjectCode: e.target.value } : ex,
-                                    ),
-                                  );
-                                }
-                              }}
-                              aria-label="Subject"
-                              className="w-44 rounded-md border border-[#D8D4CA] dark:border-[#2B403D] bg-white dark:bg-[#0C1514] px-2.5 py-1.5 text-[#111C1B] dark:text-[#EDF4F2] focus:border-[#0F766E] dark:focus:border-[#2DD4BF] focus:outline-none"
-                            >
-                              {classSubjects.map((sub) => (
-                                <option key={`${sub.className}-${sub.code}`} value={sub.code}>
-                                  {sub.display}
-                                </option>
-                              ))}
-                              {!hasExactSubject && (
-                                <option value="__CUSTOM__">
-                                  {exam.subjectCode
-                                    ? `${exam.subjectCode} (Custom)`
-                                    : classSubjects.length === 0
-                                      ? 'Type Subject Code →'
-                                      : 'Custom Code →'}
-                                </option>
-                              )}
-                            </select>
+                          <div className="flex flex-wrap items-center gap-2.5">
                             <input
                               type="text"
                               value={exam.subjectCode}
@@ -679,10 +649,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                                   ),
                                 )
                               }
-                              aria-label="Subject Code"
-                              placeholder="Code"
-                              className="w-24 rounded-md border border-[#D8D4CA] dark:border-[#2B403D] bg-white dark:bg-[#0C1514] px-2 py-1.5 font-mono text-xs text-[#111C1B] dark:text-[#EDF4F2] focus:border-[#0F766E] dark:focus:border-[#2DD4BF] focus:outline-none"
+                              aria-label="Subject (CODE-SUBJECT)"
+                              placeholder="SC-SCIENCE"
+                              className="w-56 rounded-md border border-[#D8D4CA] dark:border-[#2B403D] bg-white dark:bg-[#0C1514] px-2.5 py-1.5 font-mono text-xs text-[#111C1B] dark:text-[#EDF4F2] placeholder:text-slate-400 focus:border-[#0F766E] dark:focus:border-[#2DD4BF] focus:outline-none"
                             />
+                            {extractedCode && (
+                              <span
+                                className={`font-mono text-[11px] tabular-nums whitespace-nowrap ${
+                                  matchedCount > 0
+                                    ? 'font-semibold text-[#0F766E] dark:text-teal-400'
+                                    : 'font-medium text-amber-700 dark:text-amber-400'
+                                }`}
+                              >
+                                {matchedCount > 0
+                                  ? `${extractedCode} · ${matchedCount} students`
+                                  : `${extractedCode} · 0 matched`}
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-2.5 text-right">

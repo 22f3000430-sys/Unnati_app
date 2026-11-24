@@ -128,7 +128,60 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, loading, onN
           </div>
         </div>
       </div>
-
+      {/* 3-Step Quick Guide */}
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 rounded-xl border border-[#D8D4CA] dark:border-[#213331] bg-white dark:bg-[#111D1B] p-3 shadow-xs">
+        {[
+          {
+            step: '1',
+            title: 'Rooms & Datesheet',
+            meta: `${metrics.totalRooms} rooms · ${examSummary.length} exams`,
+            done: metrics.totalRooms > 0 && examSummary.length > 0,
+            target: 'master' as const,
+          },
+          {
+            step: '2',
+            title: 'Student Nominal Roll',
+            meta: `${metrics.totalStudents} board · ${metrics.preBoardStudents} pre-board`,
+            done: metrics.totalStudents > 0 || metrics.preBoardStudents > 0,
+            target: 'students' as const,
+          },
+          {
+            step: '3',
+            title: 'Generate & Export PDF',
+            meta: `${metrics.reportsCount} saved reports`,
+            done: metrics.reportsCount > 0,
+            target: 'board' as const,
+          },
+        ].map((item) => (
+          <button
+            key={item.step}
+            type="button"
+            onClick={() => onNavigate(item.target)}
+            className="flex items-center justify-between gap-2 rounded-lg border border-[#ECEAE4] dark:border-[#1E302E] bg-[#FAF9F5] dark:bg-[#0D1615] px-3.5 py-2.5 text-left hover:border-[#0F766E] dark:hover:border-teal-500 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md font-mono text-xs font-bold ${
+                  item.done
+                    ? 'bg-[#0F766E] text-white'
+                    : 'border border-[#D8D4CA] dark:border-[#2A403E] bg-white dark:bg-[#142321] text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                {item.done ? '✓' : item.step}
+              </span>
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-[#111C1B] dark:text-[#EDF4F2] truncate">
+                  {item.title}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate tabular-nums">
+                  {item.meta}
+                </div>
+              </div>
+            </div>
+            <ArrowRight className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+          </button>
+        ))}
+      </div>
       {/* Center Readiness Alerts */}
       {data.readinessAlerts && data.readinessAlerts.length > 0 && (
         <div className="rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/35 p-4 shadow-xs space-y-2">

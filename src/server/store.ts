@@ -409,15 +409,18 @@ export class SessionStore {
     moduleType?: SeatingModuleType,
   ): SubjectItemDto[] {
     const session = this.ensureSession(sessionYear);
-    const seen = new Map<string, { className: number; code: string }>();
+    const seen = new Map<string, { className: number; code: string; count: number }>();
 
-    const addCode = (className: number, rawCode: string) => {
+    const addCode = (className: number, rawCode: string, increment = 0) => {
       const code = normalizeSubjectToken(rawCode) || rawCode.trim().toUpperCase();
       if (!code || NON_EXAM_GRADING_CODES.has(code)) return;
       const cls = Number(className) === 12 ? 12 : 10;
       const key = `${cls}|${code}`;
-      if (!seen.has(key)) {
-        seen.set(key, { className: cls, code });
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, { className: cls, code, count: increment });
+      } else {
+        existing.count += increment;
       }
     };
 
@@ -435,26 +438,37 @@ export class SessionStore {
 
     for (const list of studentLists) {
       for (const st of list) {
+        const uniqueTokens = new Set<string>();
         for (const tok of parseSubjectTokens(st.subjects ?? '')) {
-          addCode(st.className, tok);
+          if (tok && !NON_EXAM_GRADING_CODES.has(tok)) uniqueTokens.add(tok);
+        }
+        // Hindi equivalence for HIND <-> HGEN
+        if (uniqueTokens.has('HIND') && !uniqueTokens.has('HGEN')) {
+          uniqueTokens.add('HGEN');
+        } else if (uniqueTokens.has('HGEN') && !uniqueTokens.has('HIND')) {
+          uniqueTokens.add('HIND');
+        }
+        for (const tok of uniqueTokens) {
+          addCode(st.className, tok, 1);
         }
       }
     }
 
     for (const list of examLists) {
       for (const ex of list) {
-        addCode(ex.className, ex.subjectCode);
+        addCode(ex.className, ex.subjectCode, 0);
       }
     }
 
     return Array.from(seen.values())
-      .map(({ className, code }) => {
+      .map(({ className, code, count }) => {
         const name = SUBJECT_DISPLAY_LABELS[code] ?? code;
         return {
           className,
           code,
           name,
           display: name === code ? code : `${code} - ${name}`,
+          count,
         };
       })
       .sort((a, b) => a.className - b.className || a.code.localeCompare(b.code));

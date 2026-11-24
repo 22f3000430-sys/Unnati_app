@@ -37,6 +37,7 @@ export interface SubjectItemDto {
   code: string;
   name: string;
   display: string;
+  count?: number;
 }
 
 export interface Teacher {

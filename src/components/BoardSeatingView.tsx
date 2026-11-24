@@ -76,7 +76,7 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
 
   const [schoolModeStrategy, setSchoolModeStrategy] = useState<
     'alternate_single' | 'dual_class_interleave'
-  >('alternate_single');
+  >('dual_class_interleave');
 
   const [previewData, setPreviewData] = useState<BoardSeatingPreviewResponse | null>(null);
   const [previewOptions, setPreviewOptions] = useState<SeatingGenerationOptions | null>(null);
@@ -229,12 +229,12 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
-            {isSchoolMode ? 'Pre-Board Seating (Isolated)' : 'Board Exam Seating'}
+            {isSchoolMode ? 'Pre-Board Seating' : 'Board Exam Seating'}
           </h2>
           <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
             {isSchoolMode
-              ? `Independent Pre-Board data · Session ${sessionYear}`
-              : `Top-2 school pairing · Zero cheating · Minimum rooms · Session ${sessionYear}`}
+              ? `2D checkerboard mixing · Larger class leads Seat 1 · Session ${sessionYear}`
+              : `Top-2 school pairing · Zero ortho conflicts · Session ${sessionYear}`}
           </p>
         </div>
 
@@ -330,21 +330,13 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
         <div className="rounded-xl border border-[#D8D4CA] dark:border-[#213331] bg-card-textured px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
           <div className="text-xs text-slate-700 dark:text-slate-300 tabular-nums">
             <strong className="text-[#111C1B] dark:text-[#EDF4F2]">Pre-Board Pool:</strong>{' '}
-            {totalPreBoardStudents} isolated students (independent of Board roll)
+            {totalPreBoardStudents} students ·{' '}
+            {schoolModeStrategy === 'dual_class_interleave'
+              ? 'Larger class starts R1-C1, alternates 2D with alternate-gap overflow'
+              : 'Single-class 1-seat alternate gap'}
           </div>
 
           <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-[#E2DFD7] dark:border-[#243936] bg-[#FAF9F5] dark:bg-[#0D1615] p-1">
-            <button
-              type="button"
-              onClick={() => setSchoolModeStrategy('alternate_single')}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
-                schoolModeStrategy === 'alternate_single'
-                  ? 'bg-[#0F766E] text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-[#111C1B] dark:hover:text-white'
-              }`}
-            >
-              Alternate Checkerboard
-            </button>
             <button
               type="button"
               onClick={() => setSchoolModeStrategy('dual_class_interleave')}
@@ -354,7 +346,18 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
                   : 'text-slate-600 dark:text-slate-300 hover:text-[#111C1B] dark:hover:text-white'
               }`}
             >
-              Mix Class 10 &amp; 12
+              Mix 10 &amp; 12 (Checkerboard)
+            </button>
+            <button
+              type="button"
+              onClick={() => setSchoolModeStrategy('alternate_single')}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                schoolModeStrategy === 'alternate_single'
+                  ? 'bg-[#0F766E] text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-[#111C1B] dark:hover:text-white'
+              }`}
+            >
+              Single Class Alternate
             </button>
           </div>
         </div>
@@ -400,10 +403,10 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
               </div>
               <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
                 {genderPolicy === 'separate'
-                  ? 'Boys and girls are seated in separate rooms by default.'
+                  ? 'Boys and girls stay in separate rooms.'
                   : genderPolicy === 'reserve_girls'
-                    ? 'Girls occupy your chosen rooms first; boys never enter them.'
-                    : 'Boys and girls share rooms to minimize room count.'}
+                    ? 'Selected rooms reserved strictly for girls.'
+                    : 'Boys and girls can share rooms.'}
               </p>
 
               {genderPolicy === 'reserve_girls' && (
@@ -545,8 +548,8 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
               </div>
               <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
                 {resourceMode === 'auto'
-                  ? 'Zero orthogonal conflicts; keeps 1-seat gap automatically when only 1 school remains.'
-                  : 'Checkerboard spacing (50% bench occupancy) when spare rooms allow.'}
+                  ? 'Packs diagonally/orthogonally; auto-gaps lone batches.'
+                  : '50% checkerboard spacing when spare rooms allow.'}
               </p>
             </div>
           </div>

@@ -11,7 +11,7 @@ import type {
   Student,
   Teacher,
 } from '../types/seating.ts';
-import { normalizeSubjectToken } from '../utils/subjectNormalizer.ts';
+import { extractSubjectCode, normalizeSubjectToken } from '../utils/subjectNormalizer.ts';
 
 interface StudentQueueItem {
   exam: Exam;
@@ -114,6 +114,132 @@ function repairRoomConflicts(
   }
 }
 
+interface RoomSubsetPlan {
+  rooms: Room[];
+  roomCount: number;
+  underfilledCount: number;
+  waste: number;
+  floorSum: number;
+}
+
+/**
+ * Finds the best subset of available rooms for `totalStudents` using branch-and-bound
+ * deduplicated by `(capacity, floor)` so even 40+ rooms solve in < 1ms.
+ * Prioritizes: minimum room count (2 invigilators each), fewest <22 / <60% rooms, lowest waste, lowest floor.
+ */
+function planOptimalRoomSequence(
+  availableRooms: Room[],
+  totalStudents: number,
+  sparseMode: boolean,
+): Room[] {
+  if (availableRooms.length === 0 || totalStudents <= 0) return [];
+  const effCap = (r: Room) => (sparseMode ? Math.ceil(r.capacity / 2) : r.capacity);
+  const sorted = [...availableRooms].sort(
+    (a, b) => effCap(b) - effCap(a) || a.floor - b.floor || a.roomNumber.localeCompare(b.roomNumber),
+  );
+
+  // Suffix capacity sums for pruning
+  const suffixCap = new Array<number>(sorted.length + 1).fill(0);
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    suffixCap[i] = suffixCap[i + 1] + effCap(sorted[i]);
+  }
+  if (suffixCap[0] < totalStudents) {
+    return sorted;
+  }
+
+  // Determine min feasible k greedily using largest rooms first
+  let minK = 0;
+  let acc = 0;
+  for (const r of sorted) {
+    acc += effCap(r);
+    minK++;
+    if (acc >= totalStudents) break;
+  }
+  const maxK = Math.min(sorted.length, minK + 1);
+
+  const countUnderfilled = (chosen: Room[]): number => {
+    const sumEff = chosen.reduce((s, r) => s + effCap(r), 0);
+    if (sumEff < totalStudents) return chosen.length;
+    if (sparseMode) {
+      let bad = 0;
+      let rem = totalStudents;
+      for (let i = 0; i < chosen.length; i++) {
+        const share =
+          i === chosen.length - 1
+            ? rem
+            : Math.min(effCap(chosen[i]), Math.round((totalStudents * effCap(chosen[i])) / sumEff));
+        rem -= share;
+        if (share > 0 && share < chosen[i].capacity * 0.35) bad++;
+      }
+      return bad;
+    }
+    let bad = 0;
+    let rem = totalStudents;
+    for (let i = 0; i < chosen.length; i++) {
+      const share =
+        i === chosen.length - 1
+          ? rem
+          : Math.min(chosen[i].capacity, Math.round((totalStudents * chosen[i].capacity) / sumEff));
+      rem -= share;
+      if (share > 0 && (share < 22 || share < chosen[i].capacity * 0.6)) bad++;
+    }
+    return bad;
+  };
+
+  let best: RoomSubsetPlan | null = null;
+  let steps = 0;
+  const maxSteps = 2500;
+
+  const isBetter = (a: RoomSubsetPlan, b: RoomSubsetPlan) => {
+    if (a.roomCount !== b.roomCount) return a.roomCount < b.roomCount;
+    if (a.underfilledCount !== b.underfilledCount) return a.underfilledCount < b.underfilledCount;
+    if (a.waste !== b.waste) return a.waste < b.waste;
+    return a.floorSum < b.floorSum;
+  };
+
+  const dfs = (idx: number, kLeft: number, current: Room[], capSoFar: number, floorSoFar: number) => {
+    if (++steps > maxSteps) return;
+    if (capSoFar + suffixCap[idx] < totalStudents) return;
+    if (kLeft === 0) {
+      if (capSoFar < totalStudents) return;
+      const plan: RoomSubsetPlan = {
+        rooms: [...current],
+        roomCount: current.length,
+        underfilledCount: countUnderfilled(current),
+        waste: capSoFar - totalStudents,
+        floorSum: floorSoFar,
+      };
+      if (!best || isBetter(plan, best)) {
+        best = plan;
+      }
+      return;
+    }
+    if (idx + kLeft > sorted.length) return;
+    if (best && current.length + kLeft > best.roomCount) return;
+
+    let prevSig = '';
+    for (let i = idx; i <= sorted.length - kLeft; i++) {
+      const r = sorted[i];
+      const sig = `${effCap(r)}|${r.floor}`;
+      if (sig === prevSig) continue;
+      prevSig = sig;
+
+      current.push(r);
+      dfs(i + 1, kLeft - 1, current, capSoFar + effCap(r), floorSoFar + r.floor);
+      current.pop();
+    }
+  };
+
+  for (let k = minK; k <= maxK; k++) {
+    dfs(0, k, [], 0, 0);
+    if (best && (best as RoomSubsetPlan).underfilledCount === 0) break;
+  }
+
+  const chosen = best ? (best as RoomSubsetPlan).rooms : sorted.slice(0, minK);
+  // Fill largest/lowest-floor rooms first inside chosen subset
+  return chosen.sort((a, b) => a.floor - b.floor || effCap(b) - effCap(a));
+}
+
 function pickBestRoom(
   availableRooms: Room[],
   remainingStudents: number,
@@ -137,35 +263,11 @@ function pickBestRoom(
     return singleFits[0];
   }
 
-  // Subset Lookahead: if 2 rooms together fit `remainingStudents` cleanly (avoiding a tiny 1-6 student 3rd room),
-  // prefer the larger/better-fitting room first instead of rigidly opening smaller lower-floor rooms that spill a tiny tail.
+  // Global subset lookahead: finds optimal K-room combination avoiding tiny tails and minimizing total rooms
   if (enableLookahead && availableRooms.length >= 2) {
-    let bestPair: { first: Room; second: Room; waste: number; tinyTail: boolean } | null = null;
-    for (let i = 0; i < availableRooms.length; i++) {
-      for (let j = i + 1; j < availableRooms.length; j++) {
-        const rA = availableRooms[i];
-        const rB = availableRooms[j];
-        const capSum = effCap(rA) + effCap(rB);
-        if (capSum < remainingStudents) continue;
-        // Pick larger room first (or lower floor if equal) so second room holds remainder >= 50% if possible
-        const first = effCap(rA) >= effCap(rB) ? rA : rB;
-        const second = first.id === rA.id ? rB : rA;
-        const remAfterFirst = Math.max(0, remainingStudents - effCap(first));
-        const tinyTail = remAfterFirst > 0 && (remAfterFirst <= 6 || remAfterFirst < second.capacity * 0.25);
-        const waste = capSum - remainingStudents;
-        if (
-          !bestPair ||
-          Number(tinyTail) < Number(bestPair.tinyTail) ||
-          (tinyTail === bestPair.tinyTail &&
-            (waste < bestPair.waste ||
-              (waste === bestPair.waste && first.floor < bestPair.first.floor)))
-        ) {
-          bestPair = { first, second, waste, tinyTail };
-        }
-      }
-    }
-    if (bestPair) {
-      return bestPair.first;
+    const plan = planOptimalRoomSequence(availableRooms, remainingStudents, sparseMode);
+    if (plan.length > 0) {
+      return plan[0];
     }
   }
 
@@ -322,10 +424,11 @@ function isSameGroupAssignment(
   a: SeatAssignment,
   b: SeatAssignment,
   moduleType: SeatingModuleType,
+  mixClasses = false,
 ): boolean {
-  return moduleType === 'BOARD'
-    ? a.schoolCode === b.schoolCode
-    : `${a.className}|${a.subjectCode}` === `${b.className}|${b.subjectCode}`;
+  if (moduleType === 'BOARD') return a.schoolCode === b.schoolCode;
+  if (mixClasses) return a.className === b.className;
+  return `${a.className}|${a.subjectCode}` === `${b.className}|${b.subjectCode}`;
 }
 
 /**
@@ -356,6 +459,8 @@ function populateSingleRoom(
     );
   }
 
+  const isPreBoardCheckerboard =
+    options.moduleType === 'SCHOOL' && options.mixClasses && !forceSingleAlternate;
   const isSingleGroupOnly = forceSingleAlternate || queues.size === 1;
   if ((isSingleGroupOnly || options.seatingDensity === 'sparse') && items.length > Math.ceil(room.capacity / 2)) {
     return null;
@@ -380,6 +485,31 @@ function populateSingleRoom(
       const remainingGroups = getActiveGroups();
       if (remainingGroups.length === 0) break;
 
+      if (isPreBoardCheckerboard) {
+        const isEvenSeat = (row + col) % 2 === 0;
+        const targetKey = isEvenSeat ? slotEven : slotOdd;
+        if (targetKey && (queues.get(targetKey)?.length ?? 0) > 0) {
+          const conflict = hasOrthogonalConflict(
+            roomAssignments,
+            row,
+            col,
+            (n) => getGroupKeyFromAssignment(n, options.moduleType, true) === targetKey,
+          );
+          if (!conflict) {
+            const q = queues.get(targetKey)!;
+            const chosen = shiftBestCandidate(q, roomAssignments, row, col);
+            if (chosen) {
+              const isOverflow = !slotOdd || (queues.get(slotOdd)?.length ?? 0) === 0;
+              roomAssignments.push(
+                createSeatAssignment(chosen, room, row, col, isOverflow, options.moduleType),
+              );
+              roomGroupCounts.set(targetKey, (roomGroupCounts.get(targetKey) ?? 0) + 1);
+            }
+          }
+        }
+        continue;
+      }
+
       if (forceSingleAlternate || remainingGroups.length === 1) {
         usedSingleTailInRoom = true;
         const [onlyKey, onlyQueue] = remainingGroups[0];
@@ -387,7 +517,9 @@ function populateSingleRoom(
           roomAssignments,
           row,
           col,
-          (n) => getGroupKeyFromAssignment(n, options.moduleType) === onlyKey || forceSingleAlternate,
+          (n) =>
+            getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === onlyKey ||
+            forceSingleAlternate,
         );
         if (conflict) continue;
 
@@ -427,7 +559,7 @@ function populateSingleRoom(
           roomAssignments,
           row,
           col,
-          (n) => getGroupKeyFromAssignment(n, options.moduleType) === preferredKey,
+          (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === preferredKey,
         )
       ) {
         chosenKey = preferredKey;
@@ -438,7 +570,7 @@ function populateSingleRoom(
           roomAssignments,
           row,
           col,
-          (n) => getGroupKeyFromAssignment(n, options.moduleType) === alternateKey,
+          (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === alternateKey,
         )
       ) {
         chosenKey = alternateKey;
@@ -449,7 +581,7 @@ function populateSingleRoom(
               roomAssignments,
               row,
               col,
-              (n) => getGroupKeyFromAssignment(n, options.moduleType) === k,
+              (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === k,
             ),
         );
         if (safeOther) {
@@ -482,15 +614,16 @@ function populateSingleRoom(
     return null;
   }
 
-  if (!isSingleGroupOnly) {
+  if (!isSingleGroupOnly && !isPreBoardCheckerboard) {
     repairRoomConflicts(roomAssignments, (a, b) =>
-      isSameGroupAssignment(a, b, options.moduleType),
+      isSameGroupAssignment(a, b, options.moduleType, options.mixClasses),
     );
   }
 
   const strictConflictFn = isSingleGroupOnly
     ? () => true
-    : (a: SeatAssignment, b: SeatAssignment) => isSameGroupAssignment(a, b, options.moduleType);
+    : (a: SeatAssignment, b: SeatAssignment) =>
+        isSameGroupAssignment(a, b, options.moduleType, options.mixClasses);
 
   if (hasAnyOrthogonalConflictInRoom(roomAssignments, strictConflictFn)) {
     return null;
@@ -527,7 +660,7 @@ function tryPlaceInExistingRooms(
 ): boolean {
   const candKey = getGroupKey(candidate);
   const sameGroupFn = (a: SeatAssignment, b: SeatAssignment) =>
-    isSameGroupAssignment(a, b, options.moduleType);
+    isSameGroupAssignment(a, b, options.moduleType, options.mixClasses);
 
   const candidateRooms = [...roomRecords]
     .filter((rec) => rec.assignments.length < rec.room.capacity)
@@ -556,7 +689,9 @@ function tryPlaceInExistingRooms(
     // 1. Direct zero-conflict placement (with strict 1-seat gap if single-group room)
     for (const { row, col } of emptyCoords) {
       const conflict = hasOrthogonalConflict(rec.assignments, row, col, (n) =>
-        wouldBeSingleGroup ? true : getGroupKeyFromAssignment(n, options.moduleType) === candKey,
+        wouldBeSingleGroup
+          ? true
+          : getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === candKey,
       );
       if (!conflict) {
         const assignment = createSeatAssignment(
@@ -646,11 +781,22 @@ function allocateUsingTop2Pairing(
   const totalRemaining = () =>
     Array.from(queues.values()).reduce((sum, q) => sum + q.length, 0);
 
+  const isPreBoardCheckerboard =
+    options.moduleType === 'SCHOOL' && options.mixClasses && !forceSingleAlternate;
+  const initialCohortGroups = getActiveGroups();
+  const cohortDominantEvenKey = isPreBoardCheckerboard ? (initialCohortGroups[0]?.[0] ?? null) : null;
+  const cohortOtherOddKey = isPreBoardCheckerboard ? (initialCohortGroups[1]?.[0] ?? null) : null;
+
   const roomRecords: RoomRecord[] = [];
 
   while (totalRemaining() > 0) {
     // Before opening a brand new room for a tiny tail (<= 6 students), absorb into existing open rooms first
-    if (options.seatingDensity !== 'sparse' && roomRecords.length > 0 && totalRemaining() <= 6) {
+    if (
+      !isPreBoardCheckerboard &&
+      options.seatingDensity !== 'sparse' &&
+      roomRecords.length > 0 &&
+      totalRemaining() <= 6
+    ) {
       let absorbedAny = true;
       while (absorbedAny && totalRemaining() > 0) {
         absorbedAny = false;
@@ -686,19 +832,33 @@ function allocateUsingTop2Pairing(
     const roomSparse = isSingleGroupTail || options.seatingDensity === 'sparse';
     const tailPolicy = options.tailRoomPolicy ?? 'smart_tail_absorb';
     const enableLookahead =
-      tailPolicy === 'rebalance_only' ||
-      tailPolicy === 'smart_tail_absorb' ||
-      tailPolicy === 'buffer_gender_merge';
+      !isPreBoardCheckerboard &&
+      (tailPolicy === 'rebalance_only' ||
+        tailPolicy === 'smart_tail_absorb' ||
+        tailPolicy === 'buffer_gender_merge');
 
-    const room = pickBestRoom(unusedRooms, totalRemaining(), roomSparse, enableLookahead);
+    let effectiveRemaining = totalRemaining();
+    if (isPreBoardCheckerboard && activeGroups.length >= 2) {
+      const cntA = activeGroups[0][1].length;
+      const otherSum = activeGroups.slice(1).reduce((s, [, q]) => s + q.length, 0);
+      const pairedSeats = 2 * Math.min(cntA, otherSum);
+      const overflowSeats = Math.abs(cntA - otherSum) * 2;
+      effectiveRemaining = pairedSeats + overflowSeats;
+    }
+
+    const room = pickBestRoom(unusedRooms, effectiveRemaining, roomSparse, enableLookahead);
     if (!room) break;
     usedRoomIds.add(room.id);
 
     const roomAssignments: SeatAssignment[] = [];
     const roomGroupCounts = new Map<string, number>();
 
-    let slotEven: string | null = activeGroups[0]?.[0] ?? null;
-    let slotOdd: string | null = activeGroups[1]?.[0] ?? null;
+    let slotEven: string | null = isPreBoardCheckerboard
+      ? cohortDominantEvenKey
+      : (activeGroups[0]?.[0] ?? null);
+    let slotOdd: string | null = isPreBoardCheckerboard
+      ? cohortOtherOddKey
+      : (activeGroups[1]?.[0] ?? null);
     let usedDynamicRefill = false;
     let usedSingleTailInRoom = isSingleGroupTail;
 
@@ -708,6 +868,42 @@ function allocateUsingTop2Pairing(
         const remainingGroups = getActiveGroups();
         if (remainingGroups.length === 0) break;
 
+        // Pre-Board 2D Checkerboard: Dominant (max) class ALWAYS sits on (row+col)%2===0 (starting R1-C1),
+        // other class on (row+col)%2===1; when smaller class ends, overflow sits in alternate-gap parity benches.
+        if (isPreBoardCheckerboard) {
+          if (options.seatingDensity === 'sparse' && (row + col) % 2 !== 0) {
+            continue;
+          }
+          const isEvenSeat = (row + col) % 2 === 0;
+          const targetKey = isEvenSeat ? slotEven : slotOdd;
+          if (targetKey && (queues.get(targetKey)?.length ?? 0) > 0) {
+            const conflict = hasOrthogonalConflict(
+              roomAssignments,
+              row,
+              col,
+              (n) => getGroupKeyFromAssignment(n, options.moduleType, true) === targetKey,
+            );
+            if (!conflict) {
+              const queue = queues.get(targetKey)!;
+              const chosen = shiftBestCandidate(queue, roomAssignments, row, col);
+              if (chosen) {
+                const isOverflowMode = !slotOdd || (queues.get(slotOdd)?.length ?? 0) === 0;
+                const assignment = createSeatAssignment(
+                  chosen,
+                  room,
+                  row,
+                  col,
+                  options.seatingDensity === 'sparse' || isOverflowMode,
+                  options.moduleType,
+                );
+                roomAssignments.push(assignment);
+                roomGroupCounts.set(targetKey, (roomGroupCounts.get(targetKey) ?? 0) + 1);
+              }
+            }
+          }
+          continue;
+        }
+
         // Single remaining group -> strict alternate checkerboard (no orthogonal neighbors)
         if (forceSingleAlternate || remainingGroups.length === 1) {
           usedSingleTailInRoom = true;
@@ -716,7 +912,9 @@ function allocateUsingTop2Pairing(
             roomAssignments,
             row,
             col,
-            (n) => getGroupKeyFromAssignment(n, options.moduleType) === onlyKey || forceSingleAlternate,
+            (n) =>
+              getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === onlyKey ||
+              forceSingleAlternate,
           );
           if (conflict) {
             continue; // Leave bench empty to prevent cheating
@@ -759,7 +957,7 @@ function allocateUsingTop2Pairing(
             roomAssignments,
             row,
             col,
-            (n) => getGroupKeyFromAssignment(n, options.moduleType) === preferredKey,
+            (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === preferredKey,
           )
         ) {
           chosenKey = preferredKey;
@@ -770,7 +968,7 @@ function allocateUsingTop2Pairing(
             roomAssignments,
             row,
             col,
-            (n) => getGroupKeyFromAssignment(n, options.moduleType) === alternateKey,
+            (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === alternateKey,
           )
         ) {
           chosenKey = alternateKey;
@@ -782,7 +980,7 @@ function allocateUsingTop2Pairing(
                 roomAssignments,
                 row,
                 col,
-                (n) => getGroupKeyFromAssignment(n, options.moduleType) === k,
+                (n) => getGroupKeyFromAssignment(n, options.moduleType, options.mixClasses) === k,
               ),
           );
           if (safeOther) {
@@ -811,17 +1009,18 @@ function allocateUsingTop2Pairing(
     }
 
     // Extra safety swap pass to resolve any residual edge conflict
-    if (!forceSingleAlternate) {
+    if (!forceSingleAlternate && !isPreBoardCheckerboard) {
       repairRoomConflicts(roomAssignments, (a, b) =>
-        options.moduleType === 'BOARD'
-          ? a.schoolCode === b.schoolCode
-          : `${a.className}|${a.subjectCode}` === `${b.className}|${b.subjectCode}`,
+        isSameGroupAssignment(a, b, options.moduleType, options.mixClasses),
       );
     }
 
     if (roomAssignments.length > 0) {
       let pattern: RoomSeatingReport['allocationPattern'];
-      if (forceSingleAlternate || (roomGroupCounts.size === 1 && usedSingleTailInRoom)) {
+      if (
+        !isPreBoardCheckerboard &&
+        (forceSingleAlternate || (roomGroupCounts.size === 1 && usedSingleTailInRoom))
+      ) {
         pattern =
           options.moduleType === 'SCHOOL'
             ? 'Alternate Checkerboard'
@@ -844,16 +1043,127 @@ function allocateUsingTop2Pairing(
     }
   }
 
-  // Post-pass: UP Board Underfilled (< 22 students OR < 60% capacity) Single-Room Optimization
+  // Post-pass: UP Board Underfilled (< 22 students OR < 60% capacity) Same-Cohort Optimization
   // Strict UP Board 2-per-room invigilator rule: NEVER split one room into 2 smaller rooms!
-  // 1) Merge pairs of underfilled/compatible rooms into ONE larger/fitting room
-  // 2) Absorb an underfilled room into already-open compatible rooms
-  // 3) Move an underfilled room into a SINGLE tighter unused room on same or next floor (>= 60% preferred)
+  // 0) Same-class proportional rebalance across open cohort rooms so no trailing room stays <22 or <60%
+  // 1) Merge pairs of underfilled/compatible same-class rooms into ONE larger/fitting room
+  // 2) Absorb an underfilled room into already-open compatible same-class rooms
+  // 3) Move an underfilled room into a SINGLE tighter unused room on same or next floor
   const isUnderfilledUpBoard = (rec: RoomRecord) =>
     rec.assignments.length < 22 || rec.assignments.length < rec.room.capacity * 0.6;
 
   const optLogs: string[] = [];
-  let optChanged = true;
+
+  if (
+    !isPreBoardCheckerboard &&
+    !forceSingleAlternate &&
+    options.seatingDensity !== 'sparse' &&
+    (options.tailRoomPolicy ?? 'smart_tail_absorb') === 'smart_tail_absorb' &&
+    roomRecords.length >= 2 &&
+    roomRecords.some(isUnderfilledUpBoard)
+  ) {
+    const allCohortItems = roomRecords.flatMap((r) => r.assignments.map(assignmentToQueueItem));
+    const byGroup = new Map<string, StudentQueueItem[]>();
+    for (const it of allCohortItems) {
+      const k = getGroupKey(it);
+      const arr = byGroup.get(k) ?? [];
+      arr.push(it);
+      byGroup.set(k, arr);
+    }
+    for (const arr of byGroup.values()) {
+      arr.sort(
+        (a, b) =>
+          a.student.className - b.student.className ||
+          a.student.rollNo.localeCompare(b.student.rollNo),
+      );
+    }
+
+    const totalItems = allCohortItems.length;
+    const sumCap = roomRecords.reduce((s, r) => s + r.room.capacity, 0);
+    const kRooms = roomRecords.length;
+    const targets: number[] = [];
+    let rem = totalItems;
+    for (let i = 0; i < kRooms; i++) {
+      if (i === kRooms - 1) {
+        targets.push(rem);
+      } else {
+        const t = Math.min(
+          roomRecords[i].room.capacity,
+          Math.max(1, Math.round((totalItems * roomRecords[i].room.capacity) / sumCap)),
+        );
+        targets.push(t);
+        rem -= t;
+      }
+    }
+
+    if (targets.every((t, i) => t > 0 && t <= roomRecords[i].room.capacity)) {
+      const buckets: StudentQueueItem[][] = Array.from({ length: kRooms }, () => []);
+      // Distribute each school's queue proportionally across buckets to keep Top-2 pairing viable in all K rooms
+      const groupEntries = Array.from(byGroup.entries()).sort((a, b) => b[1].length - a[1].length);
+      for (const [, list] of groupEntries) {
+        let gRem = list.length;
+        const qCopy = [...list];
+        for (let i = 0; i < kRooms; i++) {
+          const want =
+            i === kRooms - 1
+              ? gRem
+              : Math.min(
+                  gRem,
+                  targets[i] - buckets[i].length,
+                  Math.round((list.length * targets[i]) / totalItems),
+                );
+          if (want > 0) {
+            buckets[i].push(...qCopy.splice(0, want));
+            gRem -= want;
+          }
+        }
+        // Place any rounding leftovers into buckets still below target
+        while (qCopy.length > 0) {
+          const openIdx = buckets.findIndex((b, idx) => b.length < targets[idx]);
+          if (openIdx < 0) break;
+          buckets[openIdx].push(qCopy.shift()!);
+        }
+      }
+
+      const simRecords: RoomRecord[] = [];
+      let allBalancedOk = buckets.every((b, idx) => b.length === targets[idx]);
+      if (allBalancedOk) {
+        for (let i = 0; i < kRooms; i++) {
+          const sim = populateSingleRoom(
+            buckets[i],
+            roomRecords[i].room,
+            options,
+            getGroupKey,
+            forceSingleAlternate,
+          );
+          if (!sim) {
+            allBalancedOk = false;
+            break;
+          }
+          simRecords.push(sim);
+        }
+      }
+
+      if (allBalancedOk) {
+        const oldUnder = roomRecords.filter(isUnderfilledUpBoard).length;
+        const newUnder = simRecords.filter(isUnderfilledUpBoard).length;
+        const oldMinPct = Math.round(
+          Math.min(...roomRecords.map((r) => (r.assignments.length / r.room.capacity) * 100)),
+        );
+        const newMinPct = Math.round(
+          Math.min(...simRecords.map((r) => (r.assignments.length / r.room.capacity) * 100)),
+        );
+        if (newUnder < oldUnder || (newUnder === oldUnder && newMinPct > oldMinPct)) {
+          roomRecords.splice(0, roomRecords.length, ...simRecords);
+          optLogs.push(
+            `Same-class rebalanced ${kRooms} rooms (${roomRecords.map((r) => `${r.room.roomNumber}:${r.assignments.length}/${r.room.capacity}`).join(', ')}; min fill ${oldMinPct}% → ${newMinPct}%)`,
+          );
+        }
+      }
+    }
+  }
+
+  let optChanged = !isPreBoardCheckerboard;
   let optGuard = 0;
   while (optChanged && optGuard < 16) {
     optChanged = false;
@@ -1043,8 +1353,13 @@ function allocateUsingTop2Pairing(
   return { assignments, pairingLog, roomPatterns, roomRecords };
 }
 
-function getGroupKeyFromAssignment(a: SeatAssignment, moduleType: SeatingModuleType): string {
-  return moduleType === 'BOARD' ? a.schoolCode : `${a.className}|${a.subjectCode}`;
+function getGroupKeyFromAssignment(
+  a: SeatAssignment,
+  moduleType: SeatingModuleType,
+  mixClasses = false,
+): string {
+  if (moduleType === 'BOARD') return a.schoolCode;
+  return mixClasses ? String(a.className) : `${a.className}|${a.subjectCode}`;
 }
 
 function createSeatAssignment(
@@ -1055,6 +1370,7 @@ function createSeatAssignment(
   isSparseMode: boolean,
   moduleType: SeatingModuleType,
 ): SeatAssignment {
+  const cleanSubject = extractSubjectCode(chosen.exam.subjectCode) || chosen.exam.subjectCode;
   return {
     moduleType,
     examId: chosen.exam.id,
@@ -1071,7 +1387,7 @@ function createSeatAssignment(
     schoolName: chosen.student.schoolName,
     className: chosen.student.className,
     gender: chosen.student.gender,
-    subjectCode: chosen.exam.subjectCode,
+    subjectCode: cleanSubject,
     isSparseMode,
   };
 }
@@ -1079,6 +1395,7 @@ function createSeatAssignment(
 export function countAdjacencyConflicts(
   assignments: SeatAssignment[],
   moduleType: SeatingModuleType = 'BOARD',
+  mixClasses = false,
 ): {
   orthogonalConflicts: number;
   diagonalConflicts: number;
@@ -1102,7 +1419,9 @@ export function countAdjacencyConflicts(
         const sameGroup =
           moduleType === 'BOARD'
             ? a.schoolCode === b.schoolCode
-            : a.className === b.className && a.subjectCode === b.subjectCode;
+            : mixClasses
+              ? a.className === b.className
+              : a.className === b.className && a.subjectCode === b.subjectCode;
         if (!sameGroup) continue;
 
         const dr = Math.abs(a.rowNo - b.rowNo);
@@ -1575,10 +1894,13 @@ export function generateBoardSeating(
   const getGroupKey = (item: StudentQueueItem) =>
     moduleType === 'BOARD'
       ? item.student.schoolCode
-      : `${item.student.className}|${item.exam.subjectCode}`;
+      : options.mixClasses
+        ? String(item.student.className)
+        : `${item.student.className}|${item.exam.subjectCode}`;
 
   const formatGroupLabel = (key: string) => {
     if (moduleType === 'BOARD') return `School ${key}`;
+    if (options.mixClasses) return `Class ${key}`;
     const [cls, subj] = key.split('|');
     return `Cl ${cls} ${subj}`;
   };
@@ -1727,13 +2049,11 @@ export function generateBoardSeating(
       rec.assignments.length > 0 &&
       (rec.assignments.length <= 6 || rec.assignments.length < rec.room.capacity * 0.25);
 
-    // Slot-Level Pass A: Cross-Class Same-Gender Tail Absorption
+    // Slot-Level Pass A: Cross-Class Same-Gender Tail Absorption (ONLY when admin explicitly selects cross_class_tail)
     if (
       options.seatingDensity !== 'sparse' &&
       !options.mixClasses &&
-      (tailPolicy === 'cross_class_tail' ||
-        tailPolicy === 'smart_tail_absorb' ||
-        tailPolicy === 'buffer_gender_merge')
+      tailPolicy === 'cross_class_tail'
     ) {
       let absorbedCross = true;
       let crossGuard = 0;
@@ -1808,13 +2128,11 @@ export function generateBoardSeating(
       }
     }
 
-    // Slot-Level Pass A2: UP Board <22 / <60% Cross-Class Same-Gender Single-Room Consolidation
+    // Slot-Level Pass A2: UP Board <22 / <60% Cross-Class Consolidation (ONLY when explicitly opted into cross_class_tail)
     if (
       options.seatingDensity !== 'sparse' &&
       !options.mixClasses &&
-      (tailPolicy === 'cross_class_tail' ||
-        tailPolicy === 'smart_tail_absorb' ||
-        tailPolicy === 'buffer_gender_merge')
+      tailPolicy === 'cross_class_tail'
     ) {
       const isUnderfilledSlotRoom = (rec: RoomRecord) =>
         rec.assignments.length > 0 &&
@@ -2044,6 +2362,7 @@ export function generateBoardSeating(
   const { orthogonalConflicts, diagonalConflicts } = countAdjacencyConflicts(
     assignments,
     moduleType,
+    options.mixClasses,
   );
 
   return {

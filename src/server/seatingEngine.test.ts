@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { allotTeachersToRooms, generateBoardSeating } from './seatingEngine.ts';
 import { SessionStore } from './store.ts';
 import { AdminAuthManager, verifySessionToken } from './auth.ts';
-import { studentTakesSubject } from '../utils/subjectNormalizer.ts';
+import { extractSubjectCode, studentTakesSubject } from '../utils/subjectNormalizer.ts';
 import { validateExtractedStudents } from '../utils/studentValidation.ts';
 import {
   detectModalNumericRollLength,
@@ -1798,7 +1798,8 @@ test('UP Board <22 / <60% rule consolidates underfilled same-gender Class 10 + C
     { id: 2, examDate: '2026-03-19', shift: 'MORNING', className: 12, subjectCode: 'PHYS' },
   ];
 
-  const smartRes = generateBoardSeating(
+  // Under smart_tail_absorb, Class 10 and Class 12 remain strictly separate
+  const sameClassRes = generateBoardSeating(
     exams,
     rooms,
     (cls) => (cls === 10 ? s10 : s12),
@@ -1812,11 +1813,30 @@ test('UP Board <22 / <60% rule consolidates underfilled same-gender Class 10 + C
       tailRoomPolicy: 'smart_tail_absorb',
     },
   );
+  assert.equal(sameClassRes.summary.totalStudents, 28);
+  assert.equal(sameClassRes.summary.totalRooms, 2, 'smart_tail_absorb keeps Class 10 and 12 in separate rooms');
+  assert.ok(sameClassRes.roomReports.every((r) => r.classes.length === 1));
 
-  assert.equal(smartRes.summary.totalStudents, 28);
-  assert.equal(smartRes.summary.totalRooms, 1, 'Two <22 rooms merge into 1 single 30-seat room');
-  assert.equal(smartRes.summary.orthogonalConflicts, 0);
-  assert.deepEqual(smartRes.roomReports[0].classes, [10, 12]);
+  // Under explicit cross_class_tail, underfilled same-gender rooms across Class 10 & 12 merge into 1 room
+  const crossRes = generateBoardSeating(
+    exams,
+    rooms,
+    (cls) => (cls === 10 ? s10 : s12),
+    {
+      moduleType: 'BOARD',
+      mixClasses: false,
+      mixGenders: false,
+      dedicatedGirlsRoomsEnabled: false,
+      girlsRoomIds: [],
+      seatingDensity: 'auto',
+      tailRoomPolicy: 'cross_class_tail',
+    },
+  );
+
+  assert.equal(crossRes.summary.totalStudents, 28);
+  assert.equal(crossRes.summary.totalRooms, 1, 'cross_class_tail merges two <22 rooms into 1 single 30-seat room');
+  assert.equal(crossRes.summary.orthogonalConflicts, 0);
+  assert.deepEqual(crossRes.roomReports[0].classes, [10, 12]);
 });
 
 test('SessionStore.lookupByRollNo resolves subject datesheet schedule with Done, Today, Upcoming, Not Scheduled statuses and assigned seat', () => {
@@ -1911,4 +1931,176 @@ test('SessionStore.lookupByRollNo resolves subject datesheet schedule with Done,
     if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
   }
 });
+
+test('smart_tail_absorb rebalances same-class multi-room cohorts proportionally without merging classes', () => {
+  // 52 Class 10 Boys (26 from 1011, 26 from 1070) in rooms of capacity [36, 30]
+  // Greedy fill would yield [36, 16] (second room <22 & <60%); proportional rebalance yields [28, 24] -> both healthy!
+  const students: Student[] = [];
+  for (let i = 0; i < 26; i++) {
+    students.push({
+      id: 1 + i,
+      rollNo: `101011${String(i).padStart(2, '0')}`,
+      formNo: `${i}`,
+      registrationNo: `RA${i}`,
+      studentName: `A${i}`,
+      motherName: '',
+      fatherName: '',
+      subjects: 'MATH',
+      gender: 'M',
+      schoolCode: '1011',
+      schoolName: 'School 1011',
+      className: 10,
+    });
+    students.push({
+      id: 100 + i,
+      rollNo: `101070${String(i).padStart(2, '0')}`,
+      formNo: `${i}`,
+      registrationNo: `RB${i}`,
+      studentName: `B${i}`,
+      motherName: '',
+      fatherName: '',
+      subjects: 'MATH',
+      gender: 'M',
+      schoolCode: '1070',
+      schoolName: 'School 1070',
+      className: 10,
+    });
+  }
+  const rooms: Room[] = [
+    { id: 1, roomNumber: 'R-101', floor: 1, rows: 6, columns: 6, capacity: 36 },
+    { id: 2, roomNumber: 'R-102', floor: 1, rows: 5, columns: 6, capacity: 30 },
+  ];
+  const exams: Exam[] = [
+    { id: 1, examDate: '2026-03-20', shift: 'MORNING', className: 10, subjectCode: 'MATH' },
+  ];
+
+  const res = generateBoardSeating(
+    exams,
+    rooms,
+    () => students,
+    {
+      moduleType: 'BOARD',
+      mixClasses: false,
+      mixGenders: false,
+      dedicatedGirlsRoomsEnabled: false,
+      girlsRoomIds: [],
+      seatingDensity: 'auto',
+      tailRoomPolicy: 'smart_tail_absorb',
+    },
+  );
+
+  assert.equal(res.summary.totalStudents, 52);
+  assert.equal(res.summary.totalRooms, 2);
+  assert.equal(res.summary.orthogonalConflicts, 0);
+  for (const r of res.roomReports) {
+    assert.ok(r.totalStudents >= 22, `Room ${r.roomNo} has ${r.totalStudents} (>= 22 expected)`);
+    assert.ok(
+      r.totalStudents >= Math.ceil(r.capacity * 0.6),
+      `Room ${r.roomNo} fill >= 60%`,
+    );
+  }
+});
+
+test('Pre-Board 2D checkerboard starts Seat 1 (R1-C1) with larger class, alternates strictly, and uses 1-seat gap overflow', () => {
+  // Class 10 = 24 Boys (larger), Class 12 = 10 Boys (smaller) -> Total 34 students
+  // In a 30-seat room (5x6), even squares = 15, odd squares = 15.
+  // 10 Class 12 boys fit in odd squares (10/15), 15 Class 10 boys fit in even squares -> Room 1 seats 25 (15 Cl 10 + 10 Cl 12) with 1-seat gap where odd squares run out.
+  // Remaining 9 Class 10 boys sit in Room 2 on even (alternate-gap) squares only!
+  const mk = (cls: number, count: number, subj: string): Student[] =>
+    Array.from({ length: count }, (_, i) => ({
+      id: cls * 100 + i,
+      rollNo: `${cls}990${String(i).padStart(2, '0')}`,
+      formNo: `${i}`,
+      registrationNo: `PB${cls}-${i}`,
+      studentName: `S${cls}-${i}`,
+      motherName: '',
+      fatherName: '',
+      subjects: subj,
+      gender: 'M',
+      schoolCode: 'HOST',
+      schoolName: 'Host School',
+      className: cls,
+    }));
+
+  const s10 = mk(10, 24, 'SC');
+  const s12 = mk(12, 10, 'PHY');
+  const rooms: Room[] = [
+    { id: 1, roomNumber: 'R-101', floor: 1, rows: 5, columns: 6, capacity: 30 },
+    { id: 2, roomNumber: 'R-102', floor: 1, rows: 5, columns: 6, capacity: 30 },
+  ];
+  const exams: Exam[] = [
+    { id: 1, examDate: '2026-01-15', shift: 'MORNING', className: 10, subjectCode: 'SC-SCIENCE' },
+    { id: 2, examDate: '2026-01-15', shift: 'MORNING', className: 12, subjectCode: 'PHY-PHYSICS' },
+  ];
+
+  const res = generateBoardSeating(
+    exams,
+    rooms,
+    (cls) => (cls === 10 ? s10 : s12),
+    {
+      moduleType: 'SCHOOL',
+      mixClasses: true,
+      mixGenders: false,
+      dedicatedGirlsRoomsEnabled: false,
+      girlsRoomIds: [],
+      seatingDensity: 'auto',
+      tailRoomPolicy: 'smart_tail_absorb',
+      schoolModeStrategy: 'dual_class_interleave',
+    },
+  );
+
+  assert.equal(res.summary.totalStudents, 34);
+  assert.equal(res.summary.orthogonalConflicts, 0, 'Zero same-class orthogonal neighbors');
+
+  // R1-C1 (rowNo 1, columnNo 1) MUST belong to Class 10 (the max-student class)
+  const r1c1 = res.assignments.find((a) => a.roomNo === 'R-101' && a.rowNo === 1 && a.columnNo === 1);
+  assert.equal(r1c1?.className, 10);
+  assert.equal(r1c1?.subjectCode, 'SC');
+
+  // Every Class 10 student sits strictly on even parity (rowNo + columnNo) % 2 === 0
+  // Every Class 12 student sits strictly on odd parity (rowNo + columnNo) % 2 === 1
+  for (const a of res.assignments) {
+    const parity = (a.rowNo - 1 + (a.columnNo - 1)) % 2;
+    if (a.className === 10) {
+      assert.equal(parity, 0, `Class 10 at ${a.roomNo} R${a.rowNo}C${a.columnNo} must be even parity`);
+    } else {
+      assert.equal(parity, 1, `Class 12 at ${a.roomNo} R${a.rowNo}C${a.columnNo} must be odd parity`);
+    }
+  }
+});
+
+test('extractSubjectCode extracts CODE from CODE-SUBJECT format and SessionStore matches student subject code', () => {
+  assert.equal(extractSubjectCode('SC-SCIENCE'), 'SC');
+  assert.equal(extractSubjectCode('MATH - Mathematics'), 'MATH');
+  assert.equal(extractSubjectCode('CS:COMPUTER'), 'COMP');
+  assert.equal(extractSubjectCode('VOC12-VOCATIONAL'), 'VOC12');
+
+  const tmpFile = path.join(os.tmpdir(), `seating-code-match-${Date.now()}.json`);
+  try {
+    const testStore = new SessionStore(tmpFile);
+    testStore.upsertStudent(
+      '2026-27',
+      {
+        rollNo: '126999055',
+        formNo: '502',
+        registrationNo: 'REG-502',
+        studentName: 'ROHIT VERMA',
+        motherName: 'SUNITA',
+        fatherName: 'MANOJ',
+        subjects: 'HIND, ENG, MATH, SC',
+        gender: 'M',
+        schoolCode: '1011',
+        schoolName: 'DEWAN INTER COLLEGE',
+        className: 10,
+      },
+      'BOARD',
+    );
+    const matched = testStore.getStudentsForExam('2026-27', 10, 'SC-SCIENCE', 'BOARD');
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].rollNo, '126999055');
+  } finally {
+    if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  }
+});
+
 
