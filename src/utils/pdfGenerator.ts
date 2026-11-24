@@ -60,7 +60,7 @@ export function buildSeatingPlanPdf(
       ? `${report.genderMode} (Dedicated)`
       : report.genderMode;
     doc.text(
-      `Room: ${report.roomNo}   |   Floor: ${report.floor}   |   Occupied: ${report.totalStudents}/${report.capacity}   |   Allocation: ${roomType}`,
+      `Room: #${report.fillOrder ?? idx + 1} ${report.roomNo}   |   Floor: ${report.floor}   |   Occupied: ${report.totalStudents}/${report.capacity}   |   Allocation: ${roomType}`,
       margin,
       y,
     );

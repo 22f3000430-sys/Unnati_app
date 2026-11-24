@@ -123,13 +123,14 @@ function pickBestRoom(
   if (availableRooms.length === 0 || remainingStudents <= 0) return null;
   const effCap = (r: Room) => (sparseMode ? Math.ceil(r.capacity / 2) : r.capacity);
 
-  // If a single room can fit all remaining students, prefer rooms achieving >= 50% occupancy first,
-  // then lowest floor and tightest sufficient capacity.
+  // If a single room can fit all remaining students, prefer rooms achieving healthy UP Board fill (>= 60%, or >= 50% sparse)
+  // first, then lowest floor and tightest sufficient capacity.
   const singleFits = availableRooms.filter((r) => effCap(r) >= remainingStudents);
   if (singleFits.length > 0) {
+    const minRatio = sparseMode ? 0.5 : 0.6;
     singleFits.sort((a, b) => {
-      const aHealthy = remainingStudents >= a.capacity * 0.5 ? 0 : 1;
-      const bHealthy = remainingStudents >= b.capacity * 0.5 ? 0 : 1;
+      const aHealthy = remainingStudents >= a.capacity * minRatio ? 0 : 1;
+      const bHealthy = remainingStudents >= b.capacity * minRatio ? 0 : 1;
       if (aHealthy !== bHealthy) return aHealthy - bHealthy;
       return a.floor - b.floor || effCap(a) - effCap(b);
     });
@@ -843,11 +844,14 @@ function allocateUsingTop2Pairing(
     }
   }
 
-  // Post-pass: Underfilled (<50%) Room Optimization
-  // 1) Merge pairs of underfilled rooms into ONE larger/fitting room
+  // Post-pass: UP Board Underfilled (< 22 students OR < 60% capacity) Single-Room Optimization
+  // Strict UP Board 2-per-room invigilator rule: NEVER split one room into 2 smaller rooms!
+  // 1) Merge pairs of underfilled/compatible rooms into ONE larger/fitting room
   // 2) Absorb an underfilled room into already-open compatible rooms
-  // 3) Resize an underfilled room into a smaller unused room (>= 50% fill)
-  // 4) Split an oversized underfilled hall into TWO smaller unused rooms to eliminate wasted capacity
+  // 3) Move an underfilled room into a SINGLE tighter unused room on same or next floor (>= 60% preferred)
+  const isUnderfilledUpBoard = (rec: RoomRecord) =>
+    rec.assignments.length < 22 || rec.assignments.length < rec.room.capacity * 0.6;
+
   const optLogs: string[] = [];
   let optChanged = true;
   let optGuard = 0;
@@ -857,12 +861,12 @@ function allocateUsingTop2Pairing(
 
     const underfilledIndices = roomRecords
       .map((rec, idx) => ({ rec, idx }))
-      .filter(({ rec }) => rec.assignments.length < rec.room.capacity * 0.5)
+      .filter(({ rec }) => isUnderfilledUpBoard(rec))
       .sort((a, b) => a.rec.assignments.length - b.rec.assignments.length);
 
     if (underfilledIndices.length === 0) break;
 
-    // Step 1: Merge two underfilled (<50%) rooms (or 1 underfilled + 1 compatible room) into ONE room
+    // Step 1: Merge two compatible rooms (at least one <22 or <60%) into ONE room (saves 2 invigilators)
     if (roomRecords.length > 1) {
       let merged = false;
       for (let u = 0; u < underfilledIndices.length && !merged; u++) {
@@ -871,21 +875,20 @@ function allocateUsingTop2Pairing(
         for (let j = 0; j < roomRecords.length && !merged; j++) {
           if (i === j) continue;
           const recB = roomRecords[j];
-          const recBUnder = recB.assignments.length < recB.room.capacity * 0.5;
-          // Prioritize merging when both are underfilled, or combined fits cleanly into 1 room >= 50%
+          const recBUnder = isUnderfilledUpBoard(recB);
           const combinedCount = recA.assignments.length + recB.assignments.length;
           const unusedRooms = availableRooms.filter((r) => !usedRoomIds.has(r.id));
           const candidateTargets = [recB.room, recA.room, ...unusedRooms]
             .filter((r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx)
             .filter((r) => r.capacity >= combinedCount)
             .sort((a, b) => {
-              const aOk = combinedCount >= a.capacity * 0.5 ? 0 : 1;
-              const bOk = combinedCount >= b.capacity * 0.5 ? 0 : 1;
+              const aOk = combinedCount >= a.capacity * 0.6 ? 0 : 1;
+              const bOk = combinedCount >= b.capacity * 0.6 ? 0 : 1;
               if (aOk !== bOk) return aOk - bOk;
               return a.capacity - b.capacity || a.floor - b.floor;
             });
 
-          if (!recBUnder && !candidateTargets.some((r) => combinedCount >= r.capacity * 0.5)) {
+          if (!recBUnder && !candidateTargets.some((r) => combinedCount >= r.capacity * 0.6)) {
             continue;
           }
 
@@ -911,7 +914,7 @@ function allocateUsingTop2Pairing(
               ) * 100,
             );
 
-            if (newPct >= 50 || recBUnder || newPct > prevBestPct) {
+            if (newPct >= 60 || recBUnder || newPct > prevBestPct) {
               usedRoomIds.delete(recA.room.id);
               usedRoomIds.delete(recB.room.id);
               usedRoomIds.add(targetRoom.id);
@@ -933,7 +936,7 @@ function allocateUsingTop2Pairing(
       if (merged) continue;
     }
 
-    // Step 2: Absorb an underfilled room into existing open rooms
+    // Step 2: Absorb an underfilled room into existing open compatible rooms
     if (options.seatingDensity !== 'sparse' && roomRecords.length > 1) {
       let absorbed = false;
       for (const { rec, idx } of underfilledIndices) {
@@ -980,25 +983,26 @@ function allocateUsingTop2Pairing(
       if (absorbed) continue;
     }
 
-    // Step 3: Move an underfilled room (<50%) into a smaller unused room
+    // Step 3: Relocate an underfilled room (<22 students or <60% capacity) into a SINGLE tighter unused room
+    // across same floor or next floor(s) — NEVER splitting into 2 rooms (strict UP Board 2-invigilator economy).
     {
-      let shrunk = false;
+      let relocated = false;
       const unusedRooms = availableRooms.filter((r) => !usedRoomIds.has(r.id));
       for (const { rec, idx } of underfilledIndices) {
         const recItems = rec.assignments.map(assignmentToQueueItem);
-        const smallerRooms = unusedRooms
+        const candidateSingles = unusedRooms
           .filter((r) => r.capacity < rec.room.capacity && r.capacity >= recItems.length)
           .sort((a, b) => {
-            const aOk = recItems.length >= a.capacity * 0.5 ? 0 : 1;
-            const bOk = recItems.length >= b.capacity * 0.5 ? 0 : 1;
+            const aOk = recItems.length >= a.capacity * 0.6 ? 0 : 1;
+            const bOk = recItems.length >= b.capacity * 0.6 ? 0 : 1;
             if (aOk !== bOk) return aOk - bOk;
             return a.capacity - b.capacity || a.floor - b.floor;
           });
 
-        for (const smaller of smallerRooms) {
+        for (const targetRoom of candidateSingles) {
           const sim = populateSingleRoom(
             recItems,
-            smaller,
+            targetRoom,
             options,
             getGroupKey,
             forceSingleAlternate,
@@ -1006,93 +1010,24 @@ function allocateUsingTop2Pairing(
           if (!sim) continue;
 
           const oldPct = Math.round((recItems.length / rec.room.capacity) * 100);
-          const newPct = Math.round((recItems.length / smaller.capacity) * 100);
+          const newPct = Math.round((recItems.length / targetRoom.capacity) * 100);
           usedRoomIds.delete(rec.room.id);
-          usedRoomIds.add(smaller.id);
+          usedRoomIds.add(targetRoom.id);
           roomRecords[idx] = sim;
+          const floorNote =
+            targetRoom.floor === rec.room.floor
+              ? `Floor ${targetRoom.floor}`
+              : `Next Floor ${targetRoom.floor}`;
           optLogs.push(
-            `Moved underfilled Room ${rec.room.roomNumber} (${recItems.length}/${rec.room.capacity}, ${oldPct}%) → smaller Room ${smaller.roomNumber} (${recItems.length}/${smaller.capacity}, ${newPct}%)`,
+            `Moved underfilled Room ${rec.room.roomNumber} (${recItems.length}/${rec.room.capacity}, ${oldPct}%) → single ${floorNote} Room ${targetRoom.roomNumber} (${recItems.length}/${targetRoom.capacity}, ${newPct}%)`,
           );
-          shrunk = true;
+          relocated = true;
           optChanged = true;
           break;
         }
-        if (shrunk) break;
+        if (relocated) break;
       }
-      if (shrunk) continue;
-    }
-
-    // Step 4: Split an oversized underfilled hall (<50%) into TWO smaller unused rooms if that achieves higher/50%+ utilization
-    {
-      let splitDone = false;
-      const unusedRooms = availableRooms
-        .filter((r) => !usedRoomIds.has(r.id))
-        .sort((a, b) => a.capacity - b.capacity || a.floor - b.floor);
-
-      if (unusedRooms.length >= 2) {
-        for (const { rec, idx } of underfilledIndices) {
-          const recItems = rec.assignments.map(assignmentToQueueItem);
-          const oldUtil = recItems.length / rec.room.capacity;
-
-          for (let a = 0; a < unusedRooms.length && !splitDone; a++) {
-            const r1 = unusedRooms[a];
-            if (r1.capacity >= rec.room.capacity) continue;
-            for (let b = a + 1; b < unusedRooms.length && !splitDone; b++) {
-              const r2 = unusedRooms[b];
-              if (r2.capacity >= rec.room.capacity) continue;
-              const combinedCap = r1.capacity + r2.capacity;
-              if (combinedCap >= rec.room.capacity) continue;
-              if (recItems.length / combinedCap <= oldUtil) continue;
-
-              const idealSplit = Math.round(recItems.length * (r1.capacity / combinedCap));
-              const splitCandidates = Array.from(
-                new Set([
-                  idealSplit,
-                  Math.ceil(recItems.length / 2),
-                  Math.floor(recItems.length / 2),
-                ]),
-              ).filter((k) => k > 0 && k < recItems.length);
-
-              for (const k of splitCandidates) {
-                const part1 = recItems.slice(0, k);
-                const part2 = recItems.slice(k);
-                const sim1 = populateSingleRoom(
-                  part1,
-                  r1,
-                  options,
-                  getGroupKey,
-                  forceSingleAlternate,
-                );
-                const sim2 = populateSingleRoom(
-                  part2,
-                  r2,
-                  options,
-                  getGroupKey,
-                  forceSingleAlternate,
-                );
-                if (!sim1 || !sim2) continue;
-
-                const bothHealthy =
-                  part1.length >= r1.capacity * 0.5 && part2.length >= r2.capacity * 0.5;
-                if (!bothHealthy && recItems.length / combinedCap < 0.5) continue;
-
-                usedRoomIds.delete(rec.room.id);
-                usedRoomIds.add(r1.id);
-                usedRoomIds.add(r2.id);
-                roomRecords.splice(idx, 1, sim1, sim2);
-                optLogs.push(
-                  `Split underfilled Room ${rec.room.roomNumber} (${recItems.length}/${rec.room.capacity}, ${Math.round(oldUtil * 100)}%) → 2 smaller rooms ${r1.roomNumber} (${part1.length}/${r1.capacity}) + ${r2.roomNumber} (${part2.length}/${r2.capacity})`,
-                );
-                splitDone = true;
-                optChanged = true;
-                break;
-              }
-            }
-          }
-          if (splitDone) break;
-        }
-      }
-      if (splitDone) continue;
+      if (relocated) continue;
     }
   }
 
@@ -1338,6 +1273,7 @@ export function buildRoomReports(
   dedicatedGirlsRoomIds: number[] = [],
   roomPatterns: Map<string, RoomSeatingReport['allocationPattern']> = new Map(),
   teachers: Teacher[] = [],
+  preferredRoomOrder?: string[],
 ): RoomSeatingReport[] {
   const dedicatedRoomNumbers = new Set(
     rooms.filter((r) => dedicatedGirlsRoomIds.includes(r.id)).map((r) => r.roomNumber),
@@ -1355,9 +1291,29 @@ export function buildRoomReports(
   }
 
   const reports: RoomSeatingReport[] = [];
-  const sortedRoomKeys = Array.from(byRoom.keys()).sort((a, b) => a.localeCompare(b));
+  const rawRoomKeys = Array.from(byRoom.keys());
+  let orderedRoomKeys: string[];
+  if (preferredRoomOrder && preferredRoomOrder.length > 0) {
+    const seenKeys = new Set<string>();
+    orderedRoomKeys = [];
+    for (const pref of preferredRoomOrder) {
+      for (const k of rawRoomKeys) {
+        if (seenKeys.has(k)) continue;
+        const base = byRoom.get(k)?.[0]?.roomNo ?? k;
+        if (k === pref || base === pref) {
+          orderedRoomKeys.push(k);
+          seenKeys.add(k);
+        }
+      }
+    }
+    for (const k of rawRoomKeys) {
+      if (!seenKeys.has(k)) orderedRoomKeys.push(k);
+    }
+  } else {
+    orderedRoomKeys = rawRoomKeys;
+  }
 
-  for (const roomNo of sortedRoomKeys) {
+  for (const roomNo of orderedRoomKeys) {
     const groupAssignments = (byRoom.get(roomNo) ?? []).sort(
       (a, b) => a.columnNo - b.columnNo || a.rowNo - b.rowNo,
     );
@@ -1439,6 +1395,7 @@ export function buildRoomReports(
         : 'Top-2 School Pairing');
 
     reports.push({
+      fillOrder: reports.length + 1,
       roomNo,
       floor,
       rows,
@@ -1846,6 +1803,87 @@ export function generateBoardSeating(
             compatibleTargets[k].assignments = snapshots[k].assignments;
             compatibleTargets[k].groupCounts = snapshots[k].groupCounts;
             compatibleTargets[k].pattern = snapshots[k].pattern;
+          }
+        }
+      }
+    }
+
+    // Slot-Level Pass A2: UP Board <22 / <60% Cross-Class Same-Gender Single-Room Consolidation
+    if (
+      options.seatingDensity !== 'sparse' &&
+      !options.mixClasses &&
+      (tailPolicy === 'cross_class_tail' ||
+        tailPolicy === 'smart_tail_absorb' ||
+        tailPolicy === 'buffer_gender_merge')
+    ) {
+      const isUnderfilledSlotRoom = (rec: RoomRecord) =>
+        rec.assignments.length > 0 &&
+        (rec.assignments.length < 22 || rec.assignments.length < rec.room.capacity * 0.6);
+
+      let slotMerged = true;
+      let mergeGuard = 0;
+      while (slotMerged && mergeGuard < 10) {
+        slotMerged = false;
+        mergeGuard++;
+
+        for (let i = 0; i < slotRoomRecords.length && !slotMerged; i++) {
+          const entryA = slotRoomRecords[i];
+          if (entryA.isDedicatedGirls || entryA.genderMode === 'MIXED') continue;
+          if (!isUnderfilledSlotRoom(entryA.record)) continue;
+
+          for (let j = i + 1; j < slotRoomRecords.length && !slotMerged; j++) {
+            const entryB = slotRoomRecords[j];
+            if (entryB.isDedicatedGirls || entryB.genderMode !== entryA.genderMode) continue;
+            if (!isUnderfilledSlotRoom(entryB.record)) continue;
+
+            const combinedCount =
+              entryA.record.assignments.length + entryB.record.assignments.length;
+            const unusedSlotRooms = allRooms.filter(
+              (r) => !usedRoomIds.has(r.id) && !reservedGirlsRoomSet.has(r.id),
+            );
+            const candidateTargets = [entryA.record.room, entryB.record.room, ...unusedSlotRooms]
+              .filter((r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx)
+              .filter((r) => r.capacity >= combinedCount)
+              .sort((a, b) => {
+                const aOk = combinedCount >= a.capacity * 0.6 ? 0 : 1;
+                const bOk = combinedCount >= b.capacity * 0.6 ? 0 : 1;
+                if (aOk !== bOk) return aOk - bOk;
+                return a.capacity - b.capacity || a.floor - b.floor;
+              });
+
+            const combinedItems = [
+              ...entryA.record.assignments,
+              ...entryB.record.assignments,
+            ].map(assignmentToQueueItem);
+
+            for (const targetRoom of candidateTargets) {
+              const sim = populateSingleRoom(
+                combinedItems,
+                targetRoom,
+                options,
+                getGroupKey,
+                forceSingleAlternate,
+              );
+              if (!sim) continue;
+
+              sim.pattern = 'Cross-Class Tail Absorb';
+              usedRoomIds.delete(entryA.record.room.id);
+              usedRoomIds.delete(entryB.record.room.id);
+              usedRoomIds.add(targetRoom.id);
+
+              slotRoomRecords.splice(j, 1);
+              slotRoomRecords.splice(i, 1, {
+                record: sim,
+                genderMode: entryA.genderMode,
+                isDedicatedGirls: false,
+              });
+              const pct = Math.round((combinedCount / targetRoom.capacity) * 100);
+              pairingLog.push(
+                `UP Board Consolidation (${entryA.genderMode === 'F' ? 'Girls' : 'Boys'}): merged <60%/<22 rooms ${entryA.record.room.roomNumber} (${entryA.record.assignments.length}/${entryA.record.room.capacity}) + ${entryB.record.room.roomNumber} (${entryB.record.assignments.length}/${entryB.record.room.capacity}) → 1 single room ${targetRoom.roomNumber} (${combinedCount}/${targetRoom.capacity}, ${pct}%)`,
+              );
+              slotMerged = true;
+              break;
+            }
           }
         }
       }

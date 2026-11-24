@@ -112,138 +112,211 @@ export const StudentLookupView: React.FC<StudentLookupViewProps> = ({ sessionYea
         </div>
       )}
 
-      {results.map(({ moduleType, student, assignments }) => (
-        <div
-          key={`${moduleType}-${student.id}`}
-          className="rounded-xl border border-[#D8D4CA] dark:border-[#213331] bg-white dark:bg-[#111D1B] overflow-hidden shadow-xs"
-        >
-          <div className="border-b border-[#E2DFD7] dark:border-[#213331] bg-[#FAF9F5] dark:bg-[#0D1615] px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#E2DFD7] dark:border-[#243936] bg-white dark:bg-[#142321] text-[#0F766E] dark:text-teal-400">
-                <User className="h-5 w-5" />
+      {results.map(({ moduleType, student, subjectSchedule, assignments }) => {
+        const scheduleList = subjectSchedule ?? [];
+        const doneCount = scheduleList.filter((s) => s.status === 'Done').length;
+        const scheduledCount = scheduleList.filter((s) => s.status !== 'Not Scheduled').length;
+
+        return (
+          <div
+            key={`${moduleType}-${student.id}`}
+            className="rounded-xl border border-[#D8D4CA] dark:border-[#213331] bg-white dark:bg-[#111D1B] overflow-hidden shadow-xs"
+          >
+            <div className="border-b border-[#E2DFD7] dark:border-[#213331] bg-[#FAF9F5] dark:bg-[#0D1615] px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#E2DFD7] dark:border-[#243936] bg-white dark:bg-[#142321] text-[#0F766E] dark:text-teal-400">
+                  <User className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <h3 className="text-base font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
+                      {student.studentName}
+                    </h3>
+                    <span className="text-xs font-semibold text-[#0F766E] dark:text-teal-400">
+                      {moduleType === 'SCHOOL' ? 'Pre-Board' : 'Board Center'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                    Roll{' '}
+                    <span className="font-mono font-semibold text-[#111C1B] dark:text-white">
+                      {student.rollNo}
+                    </span>
+                    {' · '}Class {student.className}
+                    {' · '}
+                    {student.gender === 'F' ? 'Female' : 'Male'}
+                    {' · '}School {student.schoolCode}
+                  </p>
+                </div>
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                Form:{' '}
+                <span className="font-mono text-[#111C1B] dark:text-[#EDF4F2]">
+                  {student.formNo || '-'}
+                </span>
+                {' · '}Reg:{' '}
+                <span className="font-mono text-[#111C1B] dark:text-[#EDF4F2]">
+                  {student.registrationNo || '-'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 border-b border-[#E2DFD7] dark:border-[#213331] px-6 py-3.5 text-sm sm:grid-cols-3">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Father&apos;s Name</div>
+                <div className="mt-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
+                  {student.fatherName || '-'}
+                </div>
               </div>
               <div>
-                <div className="flex items-center gap-2.5">
-                  <h3 className="text-base font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
-                    {student.studentName}
-                  </h3>
-                  <span className="text-xs font-semibold text-[#0F766E] dark:text-teal-400">
-                    {moduleType === 'SCHOOL' ? 'Pre-Board' : 'Board Center'}
-                  </span>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Mother&apos;s Name</div>
+                <div className="mt-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
+                  {student.motherName || '-'}
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
-                  Roll{' '}
-                  <span className="font-mono font-semibold text-[#111C1B] dark:text-white">
-                    {student.rollNo}
-                  </span>
-                  {' · '}Class {student.className}
-                  {' · '}
-                  {student.gender === 'F' ? 'Female' : 'Male'}
-                  {' · '}School {student.schoolCode}
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Paper Progress</div>
+                <div className="mt-0.5 text-sm font-semibold text-[#111C1B] dark:text-[#EDF4F2] tabular-nums">
+                  {doneCount} / {scheduledCount || scheduleList.length} Done
+                </div>
+              </div>
+            </div>
+
+            {/* Subject Schedule & Done/Upcoming Status */}
+            <div className="border-b border-[#E2DFD7] dark:border-[#213331] px-6 py-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
+                Subjects &amp; Paper Schedule ({scheduleList.length})
+              </h4>
+
+              {scheduleList.length === 0 ? (
+                <p className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                  {student.subjects || 'No subjects recorded'}
                 </p>
-              </div>
-            </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              Form:{' '}
-              <span className="font-mono text-[#111C1B] dark:text-[#EDF4F2]">
-                {student.formNo || '-'}
-              </span>
-              {' · '}Reg:{' '}
-              <span className="font-mono text-[#111C1B] dark:text-[#EDF4F2]">
-                {student.registrationNo || '-'}
-              </span>
-            </div>
-          </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-[#E2DFD7] dark:border-[#213331]">
+                  <table className="min-w-full divide-y divide-[#ECEAE4] dark:divide-[#1D2E2C] text-xs">
+                    <thead className="bg-[#FAF9F5] dark:bg-[#0D1615] text-left font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      <tr>
+                        <th className="px-4 py-2">Subject</th>
+                        <th className="px-4 py-2">Exam Date &amp; Shift</th>
+                        <th className="px-4 py-2">Status</th>
+                        <th className="px-4 py-2 text-right">Room / Seat</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#F2F0EB] dark:divide-[#182725]">
+                      {scheduleList.map((subj) => {
+                        const statusColor =
+                          subj.status === 'Done'
+                            ? 'text-[#16A34A] dark:text-emerald-400 font-semibold'
+                            : subj.status === 'Today'
+                              ? 'text-[#D97706] dark:text-amber-400 font-semibold'
+                              : subj.status === 'Upcoming'
+                                ? 'text-[#0F766E] dark:text-teal-400 font-semibold'
+                                : 'text-slate-400 dark:text-slate-500';
 
-          <div className="grid grid-cols-1 gap-4 border-b border-[#E2DFD7] dark:border-[#213331] px-6 py-3.5 text-sm sm:grid-cols-3">
-            <div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Father&apos;s Name</div>
-              <div className="mt-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
-                {student.fatherName || '-'}
-              </div>
+                        return (
+                          <tr
+                            key={subj.subjectCode}
+                            className="hover:bg-[#FAF9F5]/80 dark:hover:bg-[#162624]/70"
+                          >
+                            <td className="px-4 py-2.5">
+                              <span className="font-mono font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
+                                {subj.subjectCode}
+                              </span>
+                              {subj.subjectName && subj.subjectName !== subj.subjectCode && (
+                                <span className="ml-2 text-slate-600 dark:text-slate-300">
+                                  {subj.subjectName}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-200">
+                              {subj.examDate ? `${subj.examDate} · ${subj.shift}` : '—'}
+                            </td>
+                            <td className={`px-4 py-2.5 tabular-nums ${statusColor}`}>
+                              {subj.status}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-700 dark:text-slate-200">
+                              {subj.roomNo
+                                ? `Room ${subj.roomNo}${subj.seatLabel ? ` · Seat ${subj.seatLabel}` : ''}`
+                                : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-            <div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Mother&apos;s Name</div>
-              <div className="mt-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
-                {student.motherName || '-'}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Subjects</div>
-              <div className="mt-0.5 font-mono text-xs text-slate-800 dark:text-slate-200">
-                {student.subjects}
-              </div>
-            </div>
-          </div>
 
-          <div className="px-6 py-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
-              Assigned Seats ({assignments.length})
-            </h4>
+            <div className="px-6 py-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
+                Assigned Seats ({assignments.length})
+              </h4>
 
-            {assignments.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                No saved seat assignments yet.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {assignments.map((seat, idx) => (
-                  <div
-                    key={`${seat.examId}-${idx}`}
-                    className="flex flex-col gap-4 rounded-lg border border-[#E2DFD7] dark:border-[#243936] bg-[#FAF9F5]/60 dark:bg-[#0D1615] p-4 lg:flex-row lg:items-center lg:justify-between"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
-                        <MapPin className="h-4 w-4 text-[#0F766E] dark:text-teal-400" />
-                        <span>
-                          Room {seat.roomNo} (Floor {seat.floor}) · Seat {seat.seatLabel}
-                        </span>
+              {assignments.length === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  No saved seat assignments yet.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {assignments.map((seat, idx) => (
+                    <div
+                      key={`${seat.examId}-${idx}`}
+                      className="flex flex-col gap-4 rounded-lg border border-[#E2DFD7] dark:border-[#243936] bg-[#FAF9F5]/60 dark:bg-[#0D1615] p-4 lg:flex-row lg:items-center lg:justify-between"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
+                          <MapPin className="h-4 w-4 text-[#0F766E] dark:text-teal-400" />
+                          <span>
+                            Room {seat.roomNo} (Floor {seat.floor}) · Seat {seat.seatLabel}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                          {seat.examDate} · {seat.shift} ·{' '}
+                          <span className="font-mono font-medium text-[#111C1B] dark:text-white">
+                            {seat.subjectCode}
+                          </span>
+                          {' · '}Class {seat.className} · R{seat.rowNo}-C{seat.columnNo}
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
-                        {seat.examDate} · {seat.shift} ·{' '}
-                        <span className="font-mono font-medium text-[#111C1B] dark:text-white">
-                          {seat.subjectCode}
-                        </span>
-                        {' · '}R{seat.rowNo}-C{seat.columnNo}
+
+                      <div className="overflow-x-auto">
+                        <div
+                          className="inline-grid gap-1 rounded-md border border-[#E2DFD7] dark:border-[#243936] bg-white dark:bg-[#111D1B] p-2"
+                          style={{
+                            gridTemplateColumns: `repeat(${Math.max(1, seat.roomColumns)}, minmax(22px, 26px))`,
+                          }}
+                          aria-label={`Seat grid for Room ${seat.roomNo}`}
+                        >
+                          {Array.from({ length: seat.roomRows }).map((_, rIdx) =>
+                            Array.from({ length: seat.roomColumns }).map((__, cIdx) => {
+                              const isTarget =
+                                rIdx + 1 === seat.rowNo && cIdx + 1 === seat.columnNo;
+                              return (
+                                <div
+                                  key={`${rIdx}-${cIdx}`}
+                                  title={`R${rIdx + 1}-C${cIdx + 1}`}
+                                  className={`flex h-6 items-center justify-center rounded text-[10px] font-mono ${
+                                    isTarget
+                                      ? 'bg-[#0F766E] font-bold text-white'
+                                      : 'border border-[#E2DFD7] dark:border-[#243936] bg-[#FAF9F5] dark:bg-[#0B1413] text-slate-400 dark:text-slate-500'
+                                  }`}
+                                >
+                                  {isTarget ? 'YOU' : `${rIdx + 1}.${cIdx + 1}`}
+                                </div>
+                              );
+                            }),
+                          )}
+                        </div>
                       </div>
                     </div>
-
-                    <div className="overflow-x-auto">
-                      <div
-                        className="inline-grid gap-1 rounded-md border border-[#E2DFD7] dark:border-[#243936] bg-white dark:bg-[#111D1B] p-2"
-                        style={{
-                          gridTemplateColumns: `repeat(${Math.max(1, seat.roomColumns)}, minmax(22px, 26px))`,
-                        }}
-                        aria-label={`Seat grid for Room ${seat.roomNo}`}
-                      >
-                        {Array.from({ length: seat.roomRows }).map((_, rIdx) =>
-                          Array.from({ length: seat.roomColumns }).map((__, cIdx) => {
-                            const isTarget =
-                              rIdx + 1 === seat.rowNo && cIdx + 1 === seat.columnNo;
-                            return (
-                              <div
-                                key={`${rIdx}-${cIdx}`}
-                                title={`R${rIdx + 1}-C${cIdx + 1}`}
-                                className={`flex h-6 items-center justify-center rounded text-[10px] font-mono ${
-                                  isTarget
-                                    ? 'bg-[#0F766E] font-bold text-white'
-                                    : 'border border-[#E2DFD7] dark:border-[#243936] bg-[#FAF9F5] dark:bg-[#0B1413] text-slate-400 dark:text-slate-500'
-                                }`}
-                              >
-                                {isTarget ? 'YOU' : `${rIdx + 1}.${cIdx + 1}`}
-                              </div>
-                            );
-                          }),
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };

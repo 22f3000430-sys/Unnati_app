@@ -11,7 +11,9 @@ import type {
   SessionData,
   Student,
   StudentLookupResult,
+  StudentLookupSubjectDto,
   SubjectItemDto,
+  SubjectScheduleStatus,
   Teacher,
 } from '../types/seating.ts';
 import {
@@ -925,10 +927,15 @@ export class SessionStore {
     this.persist();
   }
 
-  public lookupByRollNo(sessionYear: string, query: string): StudentLookupResult[] {
+  public lookupByRollNo(
+    sessionYear: string,
+    query: string,
+    todayOverride?: string,
+  ): StudentLookupResult[] {
     const session = this.ensureSession(sessionYear);
     const needle = query.trim().toUpperCase();
     if (!needle) return [];
+    const todayDate = todayOverride || new Date().toLocaleDateString('en-CA');
 
     const combined: Array<{ moduleType: SeatingModuleType; student: Student }> = [
       ...session.students.map((student) => ({ moduleType: 'BOARD' as const, student })),
@@ -956,9 +963,67 @@ export class SessionStore {
           };
         });
 
+      const examPool = moduleType === 'SCHOOL' ? session.schoolExams : session.exams;
+      const classExams = examPool.filter((e) => e.className === student.className);
+      const uniqueSubjects: string[] = [];
+      for (const tok of parseSubjectTokens(student.subjects ?? '')) {
+        if (!tok || NON_EXAM_GRADING_CODES.has(tok) || uniqueSubjects.includes(tok)) continue;
+        uniqueSubjects.push(tok);
+      }
+
+      const scheduleEntries: Array<StudentLookupSubjectDto & { _idx: number }> = uniqueSubjects.map(
+        (code, idx) => {
+          const matchedExam =
+            classExams.find((ex) => normalizeSubjectToken(ex.subjectCode) === code) ??
+            classExams.find((ex) => studentTakesSubject(code, ex.subjectCode));
+
+          const assignment = matchedExam
+            ? studentAssignments.find(
+                (a) => a.examId === matchedExam.id || studentTakesSubject(code, a.subjectCode),
+              )
+            : studentAssignments.find((a) => studentTakesSubject(code, a.subjectCode));
+
+          let status: SubjectScheduleStatus = 'Not Scheduled';
+          if (matchedExam) {
+            if (matchedExam.examDate < todayDate) status = 'Done';
+            else if (matchedExam.examDate === todayDate) status = 'Today';
+            else status = 'Upcoming';
+          }
+
+          return {
+            _idx: idx,
+            subjectCode: code,
+            subjectName: SUBJECT_DISPLAY_LABELS[code] ?? code,
+            examDate: matchedExam?.examDate ?? null,
+            shift: matchedExam?.shift ?? null,
+            status,
+            roomNo: assignment?.roomNo,
+            seatLabel: assignment?.seatLabel,
+          };
+        },
+      );
+
+      scheduleEntries.sort((a, b) => {
+        if (a.examDate && b.examDate) {
+          return (
+            a.examDate.localeCompare(b.examDate) ||
+            (a.shift ?? '').localeCompare(b.shift ?? '') ||
+            a._idx - b._idx
+          );
+        }
+        if (a.examDate) return -1;
+        if (b.examDate) return 1;
+        return a._idx - b._idx;
+      });
+
+      const subjectSchedule: StudentLookupSubjectDto[] = scheduleEntries.map(
+        ({ _idx: _ignored, ...rest }) => rest,
+      );
+
       return {
         moduleType,
         student,
+        subjectSchedule,
         assignments: studentAssignments,
       };
     });

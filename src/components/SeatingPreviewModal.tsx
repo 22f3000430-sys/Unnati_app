@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  HelpCircle,
   Loader2,
   Save,
   UserCheck,
@@ -15,6 +16,8 @@ import type {
   TailRoomPolicy,
 } from '../types/seating.ts';
 import { apiFetch } from '../utils/api.ts';
+import { TAIL_STRATEGY_DETAILS } from '../utils/tailStrategyMeta.ts';
+import { StrategyInfoModal } from './StrategyInfoModal.tsx';
 
 interface SeatingPreviewModalProps {
   sessionYear: string;
@@ -29,37 +32,11 @@ interface SeatingPreviewModalProps {
   onNotify: (type: 'info' | 'error', title: string, message: string) => void;
 }
 
-const PREVIEW_TAIL_OPTIONS: Array<{
-  id: TailRoomPolicy;
-  shortLabel: string;
-  hint: string;
-}> = [
-  {
-    id: 'smart_tail_absorb',
-    shortLabel: 'Smart Tail Absorb',
-    hint: 'Best-fit rooms + absorbs 1–6 tail students into compatible empty desks',
-  },
-  {
-    id: 'cross_class_tail',
-    shortLabel: 'Cross-Class Absorb',
-    hint: 'Absorbs tiny 1–6 tails into empty same-gender desks of other classes',
-  },
-  {
-    id: 'buffer_gender_merge',
-    shortLabel: 'Buffer Gender Merge',
-    hint: 'Absorbs tails first, then merges tiny Boys + Girls tails via empty buffer column',
-  },
-  {
-    id: 'rebalance_only',
-    shortLabel: 'Rebalance Same-Cohort',
-    hint: 'Lookahead & swap within same class and gender only (no cross-class mixing)',
-  },
-  {
-    id: 'strict_separate',
-    shortLabel: 'Strict Separate',
-    hint: 'Strict class & gender isolation even if trailing rooms hold 1–5 students',
-  },
-];
+const PREVIEW_TAIL_OPTIONS = TAIL_STRATEGY_DETAILS.map((d) => ({
+  id: d.id,
+  shortLabel: d.shortLabel,
+  hint: d.summary,
+}));
 
 export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
   sessionYear,
@@ -81,6 +58,7 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
     preview.roomReports[0]?.roomNo ?? '',
   );
   const [showLog, setShowLog] = useState(false);
+  const [showStrategyInfo, setShowStrategyInfo] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const filteredAssignments = useMemo(() => {
@@ -88,13 +66,12 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
     return preview.assignments.filter((a) => a.roomNo === roomFilter);
   }, [preview.assignments, roomFilter]);
 
-  const selectedMatrixRoom = useMemo(() => {
-    return (
-      preview.roomReports.find((r) => r.roomNo === matrixRoomNo) ??
-      preview.roomReports[0] ??
-      null
-    );
+  const selectedMatrixIndex = useMemo(() => {
+    const idx = preview.roomReports.findIndex((r) => r.roomNo === matrixRoomNo);
+    return idx >= 0 ? idx : 0;
   }, [preview.roomReports, matrixRoomNo]);
+
+  const selectedMatrixRoom = preview.roomReports[selectedMatrixIndex] ?? null;
 
   const tinyTailRooms = useMemo(
     () =>
@@ -110,6 +87,7 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
       const roomPatterns = Object.fromEntries(
         preview.roomReports.map((r) => [r.roomNo, r.allocationPattern]),
       );
+      const roomOrder = preview.roomReports.map((r) => r.roomNo);
       await apiFetch<{ report: GeneratedReportFile }>('/api/board-seating/save', sessionYear, {
         method: 'POST',
         body: JSON.stringify({
@@ -118,6 +96,7 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
           assignments: preview.assignments,
           girlsRoomIds,
           roomPatterns,
+          roomOrder,
         }),
       });
       onSavedAndGoToReports();
@@ -167,9 +146,19 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
         {onChangeTailPolicy && (
           <div className="border-b border-[#E2DFD7] dark:border-[#213331] bg-[#F5F3EC] dark:bg-[#0A1312] px-6 py-2.5 space-y-1.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                Compare Tail-Room Strategy Live
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                  Compare Tail-Room Strategy Live
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowStrategyInfo((v) => !v)}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#D8D4CA] dark:border-[#2A403E] bg-white dark:bg-[#111D1B] px-2 py-0.5 text-[11px] font-semibold text-[#0F766E] dark:text-teal-300 hover:bg-[#FAF9F5] dark:hover:bg-[#182725] cursor-pointer"
+                >
+                  <HelpCircle className="h-3 w-3" />
+                  Strategy Info
+                </button>
+              </div>
               <span className="text-[11px] text-slate-600 dark:text-slate-400">
                 {activeTailMeta.hint}
               </span>
@@ -334,9 +323,9 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                 onChange={(e) => setMatrixRoomNo(e.target.value)}
                 className="rounded-md border border-[#D8D4CA] dark:border-[#2A403E] bg-white dark:bg-[#0C1514] px-2.5 py-1 font-mono text-xs text-[#111C1B] dark:text-[#EDF4F2] focus:border-[#0F766E] focus:outline-none"
               >
-                {preview.roomReports.map((r) => (
+                {preview.roomReports.map((r, idx) => (
                   <option key={r.roomNo} value={r.roomNo}>
-                    {r.roomNo} ({r.totalStudents}/{r.capacity} · {r.genderMode})
+                    #{r.fillOrder ?? idx + 1} {r.roomNo} ({r.totalStudents}/{r.capacity} · Cl {r.classes.join('/')} · {r.genderMode})
                   </option>
                 ))}
               </select>
@@ -358,9 +347,9 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                 className="rounded-md border border-[#D8D4CA] dark:border-[#2A403E] bg-white dark:bg-[#0C1514] px-2.5 py-1 font-mono text-xs text-[#111C1B] dark:text-[#EDF4F2] focus:border-[#0F766E] focus:outline-none"
               >
                 <option value="ALL">All Rooms</option>
-                {preview.roomReports.map((r) => (
+                {preview.roomReports.map((r, idx) => (
                   <option key={r.roomNo} value={r.roomNo}>
-                    {r.roomNo}
+                    #{r.fillOrder ?? idx + 1} {r.roomNo}
                   </option>
                 ))}
               </select>
@@ -375,9 +364,13 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600 dark:text-slate-300">
                 <div>
                   <strong className="font-mono text-[#111C1B] dark:text-[#EDF4F2]">
-                    Room {selectedMatrixRoom.roomNo}
+                    #{selectedMatrixRoom.fillOrder ?? selectedMatrixIndex + 1} · Room {selectedMatrixRoom.roomNo}
                   </strong>
                   {' · '}Floor {selectedMatrixRoom.floor}
+                  {' · '}
+                  <span className="font-semibold text-[#111C1B] dark:text-[#EDF4F2]">
+                    Class {selectedMatrixRoom.classes.join(' & ')}
+                  </span>
                   {' · '}
                   {selectedMatrixRoom.genderMode}
                   {' · '}
@@ -388,7 +381,11 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                 </div>
                 <div className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                   {selectedMatrixRoom.rows} × {selectedMatrixRoom.columns} ·{' '}
-                  {selectedMatrixRoom.totalStudents} Seated
+                  {selectedMatrixRoom.totalStudents}/{selectedMatrixRoom.capacity} Seated (
+                  {selectedMatrixRoom.capacity > 0
+                    ? Math.round((selectedMatrixRoom.totalStudents / selectedMatrixRoom.capacity) * 100)
+                    : 0}
+                  %)
                 </div>
               </div>
 
@@ -454,7 +451,10 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                               {cell.rollNo}
                             </div>
                             <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-300 font-mono">
-                              School {cell.schoolCode}
+                              Cl {cell.className} · Sch {cell.schoolCode}
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                              {cell.subjectCode}
                             </div>
                           </>
                         )}
@@ -502,15 +502,17 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#F2F0EB] dark:divide-[#182725]">
-                    {preview.roomReports.map((room) => (
+                    {preview.roomReports.map((room, idx) => (
                       <tr
                         key={room.roomNo}
                         className="hover:bg-[#FAF9F5] dark:hover:bg-[#162624]"
                       >
                         <td className="px-4 py-3">
-                          <div className="font-mono font-semibold">{room.roomNo}</div>
+                          <div className="font-mono font-semibold">
+                            #{room.fillOrder ?? idx + 1} · {room.roomNo}
+                          </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400">
-                            Floor {room.floor}
+                            Floor {room.floor} · Class {room.classes.join(' & ')}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-slate-700 dark:text-slate-200">
@@ -616,6 +618,7 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                     <th className="px-3 py-2.5">Room</th>
                     <th className="px-3 py-2.5">Seat</th>
                     <th className="px-3 py-2.5">Roll No</th>
+                    <th className="px-3 py-2.5">Class</th>
                     <th className="px-3 py-2.5">School Code</th>
                     <th className="px-3 py-2.5">Gender</th>
                   </tr>
@@ -631,6 +634,9 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
                         {a.seatLabel}
                       </td>
                       <td className="px-3 py-2 font-mono font-semibold tabular-nums">{a.rollNo}</td>
+                      <td className="px-3 py-2 font-mono text-slate-700 dark:text-slate-200">
+                        Cl {a.className}
+                      </td>
                       <td className="px-3 py-2 font-mono text-slate-700 dark:text-slate-200">
                         {a.schoolCode}
                       </td>
@@ -670,6 +676,13 @@ export const SeatingPreviewModal: React.FC<SeatingPreviewModalProps> = ({
           </div>
         </div>
       </div>
+
+      <StrategyInfoModal
+        open={showStrategyInfo}
+        activePolicy={activeTailPolicy}
+        onClose={() => setShowStrategyInfo(false)}
+        onSelectPolicy={onChangeTailPolicy}
+      />
     </div>
   );
 };

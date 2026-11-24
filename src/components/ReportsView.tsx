@@ -215,9 +215,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   onChange={(e) => setSelectedRoomNo(e.target.value)}
                   className="rounded-md border border-[#D8D4CA] dark:border-[#2A403E] bg-white dark:bg-[#0C1514] px-2.5 py-1 font-mono text-xs text-[#111C1B] dark:text-[#EDF4F2] focus:border-[#0F766E] focus:outline-none"
                 >
-                  {inspectingReport.roomReports.map((r) => (
+                  {inspectingReport.roomReports.map((r, idx) => (
                     <option key={r.roomNo} value={r.roomNo}>
-                      Room {r.roomNo} ({r.totalStudents}/{r.capacity} · {r.genderMode})
+                      #{r.fillOrder ?? idx + 1} Room {r.roomNo} ({r.totalStudents}/{r.capacity} · Cl {r.classes.join('/')} · {r.genderMode})
                     </option>
                   ))}
                 </select>
@@ -226,7 +226,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               {activeRoomReport && (
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
                   <span>
-                    Floor {activeRoomReport.floor} · {activeRoomReport.allocationPattern}
+                    Floor {activeRoomReport.floor} · Class {activeRoomReport.classes.join(' & ')} ·{' '}
+                    {activeRoomReport.allocationPattern}
                   </span>
                   {activeRoomReport.invigilators && activeRoomReport.invigilators.length > 0 && (
                     <span className="rounded-md bg-white dark:bg-[#142321] border border-[#D8D4CA] dark:border-[#2A403E] px-2.5 py-0.5 font-medium text-[#111C1B] dark:text-[#EDF4F2]">
@@ -276,7 +277,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                                 {cell.rollNo}
                               </div>
                               <div className="mt-0.5 font-mono text-[11px] text-slate-600 dark:text-slate-300">
-                                School {cell.schoolCode}
+                                Cl {cell.className} · Sch {cell.schoolCode}
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                                {cell.subjectCode}
                               </div>
                             </>
                           )}

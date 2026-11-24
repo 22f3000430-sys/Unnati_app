@@ -1,9 +1,10 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { PDFDocument } from 'pdf-lib';
-import { extractText, getDocumentProxy } from 'unpdf';
+import { extractText, getDocumentProxy, inspectPages } from 'unpdf';
 import type { OcrStudentDto, SchoolExtractionSummary } from '../types/seating.ts';
 import { parseStudentsFromText } from '../utils/importParsers.ts';
 import { NON_EXAM_GRADING_CODES } from '../utils/subjectNormalizer.ts';
+import { parseUpBoardDigitalPdfText } from '../utils/upBoardTextParser.ts';
 
 export interface PdfExtractionResult {
   students: OcrStudentDto[];
@@ -102,11 +103,59 @@ function isLowQualityTextExtraction(rows: OcrStudentDto[]): boolean {
   return incomplete / rows.length > 0.25;
 }
 
-async function extractTextLayerFromPdf(buffer: Uint8Array): Promise<{ text: string; numPages: number }> {
+function buildSchoolSummaries(students: OcrStudentDto[]): SchoolExtractionSummary[] {
+  const map = new Map<string, SchoolExtractionSummary>();
+  for (const s of students) {
+    const code = (s.schoolCode || '').trim().toUpperCase();
+    if (!code) continue;
+    const entry = map.get(code) ?? {
+      schoolCode: code,
+      schoolName: (s.schoolName ?? '').trim().toUpperCase(),
+      extractedCount: 0,
+      maleCount: 0,
+      femaleCount: 0,
+    };
+    entry.extractedCount++;
+    if (s.gender === 'M') entry.maleCount++;
+    else if (s.gender === 'F') entry.femaleCount++;
+    if (!entry.schoolName && s.schoolName) entry.schoolName = s.schoolName.trim().toUpperCase();
+    map.set(code, entry);
+  }
+  return Array.from(map.values()).sort((a, b) => a.schoolCode.localeCompare(b.schoolCode));
+}
+
+async function extractTextLayerFromPdf(buffer: Uint8Array): Promise<{
+  pageTexts: string[];
+  joinedText: string;
+  numPages: number;
+  hasVisibleDigitalText: boolean;
+}> {
   const pdf = await getDocumentProxy(buffer);
   const numPages = pdf.numPages ?? 1;
-  const { text } = await extractText(pdf, { mergePages: true });
-  return { text: String(text ?? ''), numPages };
+
+  let hasVisibleDigitalText = true;
+  try {
+    const inspected = await inspectPages(pdf);
+    const totalVisible = inspected.pages.reduce(
+      (sum, p) => sum + Math.max(0, (p.textLength ?? 0) - (p.invisibleTextLength ?? 0)),
+      0,
+    );
+    const totalInvisible = inspected.pages.reduce(
+      (sum, p) => sum + (p.invisibleTextLength ?? 0),
+      0,
+    );
+    // Scanned OCR PDFs have almost all characters in invisible rendering mode 3/7 or 0 text
+    hasVisibleDigitalText = totalVisible >= 60 && totalVisible >= totalInvisible;
+  } catch {
+    hasVisibleDigitalText = true;
+  }
+
+  const { text } = await extractText(pdf, { mergePages: false });
+  const pageTexts = Array.isArray(text)
+    ? text.map((t) => String(t ?? ''))
+    : [String(text ?? '')];
+  const joinedText = pageTexts.join('\n');
+  return { pageTexts, joinedText, numPages, hasVisibleDigitalText };
 }
 
 async function splitPdfIntoPages(
@@ -269,18 +318,42 @@ export async function extractStudentsFromUploadedDocument(
   const uint8 = new Uint8Array(fileBuffer);
   const ai = getGeminiClient();
 
-  // 1. Try fast digital text-layer extraction unless caller explicitly forces AI Vision
+  // 1. Try fast deterministic digital text-layer extraction first (Portal Soft-Copy PDFs) unless caller forces AI Vision
   if (!forceAiVision) {
     try {
-      const { text, numPages } = await extractTextLayerFromPdf(uint8);
-      if (text.trim().length >= 80) {
-        const parsed = parseStudentsFromText(text, defaultSchoolCode, defaultClassName);
-        if (parsed.length > 0 && (!ai || !isLowQualityTextExtraction(parsed))) {
+      const { pageTexts, joinedText, numPages, hasVisibleDigitalText } =
+        await extractTextLayerFromPdf(uint8);
+
+      if (hasVisibleDigitalText && joinedText.trim().length >= 60) {
+        // First try UP Board official Nominal Roll layout parser
+        const upBoard = parseUpBoardDigitalPdfText(
+          pageTexts,
+          defaultSchoolCode,
+          defaultClassName,
+        );
+        if (upBoard.students.length > 0 && !isLowQualityTextExtraction(upBoard.students)) {
+          return {
+            students: upBoard.students,
+            method: 'text',
+            centerCode: upBoard.centerCode || undefined,
+            centerName: upBoard.centerName || undefined,
+            pagesProcessed: numPages,
+            failedPages: [],
+            schoolSummaries: upBoard.schoolSummaries,
+            message: `Instantly parsed ${upBoard.students.length} student(s) across ${upBoard.schoolSummaries.length} school(s) from portal digital PDF "${fileName}" (${numPages} page(s)) — zero AI OCR needed.`,
+          };
+        }
+
+        // Fall back to generic CSV/tabular text parser for simpler digital PDFs
+        const parsed = parseStudentsFromText(joinedText, defaultSchoolCode, defaultClassName);
+        if (parsed.length > 0 && !isLowQualityTextExtraction(parsed)) {
+          const summaries = buildSchoolSummaries(parsed);
           return {
             students: parsed,
             method: 'text',
             pagesProcessed: numPages,
             failedPages: [],
+            schoolSummaries: summaries,
             message: `Extracted ${parsed.length} student row(s) from digital PDF "${fileName}" (${numPages} page(s)).`,
           };
         }

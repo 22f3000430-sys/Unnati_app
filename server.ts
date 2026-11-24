@@ -620,6 +620,9 @@ async function startServer() {
     const patternMap = new Map<string, RoomSeatingReport['allocationPattern']>(
       Object.entries(rawPatterns),
     );
+    const roomOrder: string[] | undefined = Array.isArray(req.body?.roomOrder)
+      ? req.body.roomOrder.map((x: unknown) => String(x)).filter(Boolean)
+      : undefined;
 
     if (assignments.length === 0) {
       res.status(400).json({ error: 'No seating assignments to save.' });
@@ -640,6 +643,7 @@ async function startServer() {
       girlsRoomIds,
       patternMap,
       session.teachers,
+      roomOrder,
     );
     const reportRecord = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

@@ -11,8 +11,10 @@ import { validateExtractedStudents } from '../utils/studentValidation.ts';
 import {
   detectModalNumericRollLength,
   doesPageNeedHighAccuracyRetry,
+  extractStudentsFromUploadedDocument,
   scorePagePayload,
 } from './pdfExtractor.ts';
+import { parseUpBoardDigitalPdfText } from '../utils/upBoardTextParser.ts';
 import {
   parseExamsFromText,
   parseRoomsFromText,
@@ -872,9 +874,9 @@ test('underfilled <50% room merges with another room into 1 larger room when ava
   assert.equal(res.summary.orthogonalConflicts, 0);
 });
 
-test('oversized <50% single-school hall splits into 2 smaller rooms >=50% while preserving 1-seat gap', () => {
-  // 20 single-school students need 1-seat gap -> fits in HALL-60 (20/60 = 33% <50%),
-  // or splits cleanly into two 20-seat rooms (10/20 = 50% + 10/20 = 50%).
+test('UP Board <22/<60% oversized single-school hall moves to tighter next-floor single room and NEVER splits into 2 rooms', () => {
+  // 20 single-school students need 1-seat gap -> fits in HALL-60 (20/60 = 33%),
+  // or moves intact to single Floor 2 R-401 (20/40 = 50%), NEVER splitting into two 20-seat rooms R-S1 + R-S2 (which wastes +2 invigilators).
   const students: Student[] = [];
   for (let i = 0; i < 20; i++) {
     students.push({
@@ -896,6 +898,7 @@ test('oversized <50% single-school hall splits into 2 smaller rooms >=50% while 
     { id: 1, roomNumber: 'HALL-60', floor: 1, rows: 10, columns: 6, capacity: 60 },
     { id: 2, roomNumber: 'R-S1', floor: 2, rows: 5, columns: 4, capacity: 20 },
     { id: 3, roomNumber: 'R-S2', floor: 2, rows: 5, columns: 4, capacity: 20 },
+    { id: 4, roomNumber: 'R-401', floor: 2, rows: 8, columns: 5, capacity: 40 },
   ];
   const exam: Exam = {
     id: 1,
@@ -915,8 +918,9 @@ test('oversized <50% single-school hall splits into 2 smaller rooms >=50% while 
   });
 
   assert.equal(res.summary.totalStudents, 20);
-  assert.equal(res.summary.totalRooms, 2);
-  assert.ok(res.roomReports.every((r) => r.totalStudents >= r.capacity * 0.5));
+  assert.equal(res.summary.totalRooms, 1, 'Strict 2-per-room invigilator rule: never split into 2 rooms');
+  assert.equal(res.summary.teachersRequired, 2);
+  assert.equal(res.roomReports[0].roomNo, 'R-401');
   assert.equal(res.summary.orthogonalConflicts, 0);
 });
 
@@ -1593,3 +1597,318 @@ test('pdfExtractor Pass 2 escalation detects empty/clipped/missing-gender pages 
 
   assert.ok(scorePagePayload(cleanPage, modalLen) > scorePagePayload(clippedPage, modalLen));
 });
+
+test('parseUpBoardDigitalPdfText deterministically parses portal soft-copy UP Board Class 10 & 12 nominal rolls and reconciles SCHOOL WISE totals', () => {
+  const page1 = `
+    BOARD OF HIGH SCHOOL AND INTERMEDIATE EDUCATION U.P., PRAYAGRAJ
+    HIGH SCHOOL EXAM 2026
+    CENTRE CD/NAME : 04501 G I C HAPUR
+    SCH CD/NAME : 1011 DEWAN INTER COLLEGE HAPUR
+    1260441630 1001 AARAV SHARMA 1 R A 1 3 HIND ENG MATH SC SLSC DRG MSPE 1410110000101
+    1260441631 1002 PRIYA TYAGI 2 R A 1 3 HIND ENG MATH SC SLSC COM MSPE 1410110000102
+    SCHOOL WISE   MALE: 1   FEMALE: 1   TOTAL: 2
+  `;
+
+  const page2 = `
+    INTERMEDIATE EXAM 2026
+    CENTRE CD/NAME : 04501 G I C HAPUR
+    SCH CD/NAME : 1045 S S V INTER COLLEGE HAPUR
+    2265410564 ABHINAV TYAGI
+    SUNITA TYAGI
+    RAMESH TYAGI 1 1 B 1 3 HGEN ENG PHYS CHEM MATH MSPE 2023-1230444941 2255427130 1410450000888
+    SCHOOL WISE   MALE: 1   FEMALE: 0   TOTAL: 1
+  `;
+
+  const parsed = parseUpBoardDigitalPdfText([page1, page2], '1011', '10');
+  assert.equal(parsed.centerCode, '04501');
+  assert.equal(parsed.students.length, 3);
+
+  assert.equal(parsed.students[0].roll_no, '1260441630');
+  assert.equal(parsed.students[0].gender, 'M');
+  assert.equal(parsed.students[0].className, '10');
+  assert.equal(parsed.students[0].schoolCode, '1011');
+  assert.equal(parsed.students[0].subjects, 'HIND, ENG, MATH, SC, SLSC, DRG');
+  assert.equal(parsed.students[0].registration_no, '1410110000101');
+
+  assert.equal(parsed.students[1].gender, 'F');
+  assert.equal(parsed.students[1].subjects, 'HIND, ENG, MATH, SC, SLSC, COM');
+
+  // Class 12 repeater: ignores HS-YEAR-ROLL (2023-1230444941) & FAIL-ROLLNO (2255427130), keeps REGISTRATION-NO
+  assert.equal(parsed.students[2].roll_no, '2265410564');
+  assert.equal(parsed.students[2].className, '12');
+  assert.equal(parsed.students[2].schoolCode, '1045');
+  assert.equal(parsed.students[2].gender, 'M');
+  assert.equal(parsed.students[2].subjects, 'HGEN, ENG, PHYS, CHEM, MATH');
+  assert.equal(parsed.students[2].registration_no, '1410450000888');
+
+  assert.equal(parsed.schoolSummaries.length, 2);
+  assert.equal(parsed.schoolSummaries[0].printedTotal, 2);
+  assert.equal(parsed.schoolSummaries[0].extractedCount, 2);
+  assert.equal(parsed.schoolSummaries[1].printedTotal, 1);
+  assert.equal(parsed.schoolSummaries[1].extractedCount, 1);
+});
+
+test('extractStudentsFromUploadedDocument extracts real born-digital PDF buffer via text layer with zero AI key needed', async () => {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const page = doc.addPage([800, 600]);
+  const lines = [
+    'HIGH SCHOOL EXAM 2026',
+    'CENTRE CD/NAME : 04501 G I C HAPUR',
+    'SCH CD/NAME : 1070 S N B S I C BABU GARH HAPUR',
+    '1260450001 1011 ROHIT VERMA 1 R A 1 3 HIND ENG MATH SC SLSC DRG MSPE 1410700000001',
+    '1260450002 1012 ANANYA SINGH 2 R A 1 3 HIND ENG MATH SC SLSC COM MSPE 1410700000002',
+    'SCHOOL WISE MALE: 1 FEMALE: 1 TOTAL: 2',
+  ];
+  lines.forEach((txt, idx) => {
+    page.drawText(txt, { x: 40, y: 540 - idx * 24, size: 11, font });
+  });
+
+  const pdfBytes = await doc.save();
+  const res = await extractStudentsFromUploadedDocument(
+    Buffer.from(pdfBytes),
+    'portal-nominal-roll.pdf',
+    'application/pdf',
+    '1011',
+    '10',
+    false,
+  );
+
+  assert.equal(res.method, 'text');
+  assert.equal(res.centerCode, '04501');
+  assert.equal(res.students.length, 2);
+  assert.equal(res.students[0].roll_no, '1260450001');
+  assert.equal(res.students[0].schoolCode, '1070');
+  assert.equal(res.students[0].gender, 'M');
+  assert.equal(res.students[1].gender, 'F');
+  assert.equal(res.schoolSummaries?.[0].printedTotal, 2);
+  assert.equal(res.schoolSummaries?.[0].extractedCount, 2);
+});
+
+test('roomReports preserve exact chronological allocation fill sequence (#1, #2...) rather than alphabetical room sorting', () => {
+  // Floor 1 Room 'Z-101' (cap 30) fills FIRST; Floor 2 Room 'A-201' (cap 30) fills SECOND.
+  // Alphabetical sorting would wrongly list A-201 before Z-101; fill order must keep Z-101 as #1 and A-201 as #2!
+  const students: Student[] = [];
+  for (let i = 0; i < 20; i++) {
+    students.push({
+      id: i + 1,
+      rollNo: `1011${String(i).padStart(3, '0')}`,
+      formNo: `${i}`,
+      registrationNo: `R1-${i}`,
+      studentName: `A${i}`,
+      motherName: '',
+      fatherName: '',
+      subjects: 'MATH',
+      gender: 'M',
+      schoolCode: '1011',
+      schoolName: 'School 1011',
+      className: 10,
+    });
+    students.push({
+      id: 100 + i + 1,
+      rollNo: `1070${String(i).padStart(3, '0')}`,
+      formNo: `${i}`,
+      registrationNo: `R2-${i}`,
+      studentName: `B${i}`,
+      motherName: '',
+      fatherName: '',
+      subjects: 'MATH',
+      gender: 'M',
+      schoolCode: '1070',
+      schoolName: 'School 1070',
+      className: 10,
+    });
+  }
+  const rooms: Room[] = [
+    { id: 1, roomNumber: 'Z-101', floor: 1, rows: 5, columns: 6, capacity: 30 },
+    { id: 2, roomNumber: 'A-201', floor: 2, rows: 5, columns: 6, capacity: 30 },
+  ];
+  const exam: Exam = {
+    id: 1,
+    examDate: '2026-03-18',
+    shift: 'MORNING',
+    className: 10,
+    subjectCode: 'MATH',
+  };
+
+  const res = generateBoardSeating([exam], rooms, () => students, {
+    moduleType: 'BOARD',
+    mixClasses: false,
+    mixGenders: false,
+    dedicatedGirlsRoomsEnabled: false,
+    girlsRoomIds: [],
+    seatingDensity: 'auto',
+  });
+
+  assert.equal(res.roomReports.length, 2);
+  assert.equal(res.roomReports[0].roomNo, 'Z-101');
+  assert.equal(res.roomReports[0].fillOrder, 1);
+  assert.equal(res.roomReports[1].roomNo, 'A-201');
+  assert.equal(res.roomReports[1].fillOrder, 2);
+});
+
+test('UP Board <22 / <60% rule consolidates underfilled same-gender Class 10 + Class 12 batches into 1 room and relocates <22 batches to tighter next-floor single room', () => {
+  // Class 10 Boys: 14 students (7 from 1011 + 7 from 1070) -> <22 and <60% in a 30-seat room
+  // Class 12 Boys: 14 students (7 from 1011 + 7 from 1070) -> <22 and <60% in a 30-seat room
+  // Under smart_tail_absorb, instead of keeping two underfilled rooms (4 invigilators), they consolidate into ONE 30-seat room (28/30 = 93%, 2 invigilators)!
+  const mkBatch = (cls: number, baseId: number, subj: string): Student[] => {
+    const out: Student[] = [];
+    for (let i = 0; i < 7; i++) {
+      out.push({
+        id: baseId + i,
+        rollNo: `${cls}1011${i}`,
+        formNo: `${i}`,
+        registrationNo: `R${cls}A${i}`,
+        studentName: `A${i}`,
+        motherName: '',
+        fatherName: '',
+        subjects: subj,
+        gender: 'M',
+        schoolCode: '1011',
+        schoolName: 'School 1011',
+        className: cls,
+      });
+      out.push({
+        id: baseId + 50 + i,
+        rollNo: `${cls}1070${i}`,
+        formNo: `${i}`,
+        registrationNo: `R${cls}B${i}`,
+        studentName: `B${i}`,
+        motherName: '',
+        fatherName: '',
+        subjects: subj,
+        gender: 'M',
+        schoolCode: '1070',
+        schoolName: 'School 1070',
+        className: cls,
+      });
+    }
+    return out;
+  };
+
+  const s10 = mkBatch(10, 1, 'MATH');
+  const s12 = mkBatch(12, 200, 'PHYS');
+  const rooms: Room[] = [
+    { id: 1, roomNumber: 'R-101', floor: 1, rows: 5, columns: 6, capacity: 30 },
+    { id: 2, roomNumber: 'R-201', floor: 2, rows: 5, columns: 6, capacity: 30 },
+  ];
+  const exams: Exam[] = [
+    { id: 1, examDate: '2026-03-19', shift: 'MORNING', className: 10, subjectCode: 'MATH' },
+    { id: 2, examDate: '2026-03-19', shift: 'MORNING', className: 12, subjectCode: 'PHYS' },
+  ];
+
+  const smartRes = generateBoardSeating(
+    exams,
+    rooms,
+    (cls) => (cls === 10 ? s10 : s12),
+    {
+      moduleType: 'BOARD',
+      mixClasses: false,
+      mixGenders: false,
+      dedicatedGirlsRoomsEnabled: false,
+      girlsRoomIds: [],
+      seatingDensity: 'auto',
+      tailRoomPolicy: 'smart_tail_absorb',
+    },
+  );
+
+  assert.equal(smartRes.summary.totalStudents, 28);
+  assert.equal(smartRes.summary.totalRooms, 1, 'Two <22 rooms merge into 1 single 30-seat room');
+  assert.equal(smartRes.summary.orthogonalConflicts, 0);
+  assert.deepEqual(smartRes.roomReports[0].classes, [10, 12]);
+});
+
+test('SessionStore.lookupByRollNo resolves subject datesheet schedule with Done, Today, Upcoming, Not Scheduled statuses and assigned seat', () => {
+  const tmpFile = path.join(os.tmpdir(), `seating-lookup-${Date.now()}.json`);
+  try {
+    const testStore = new SessionStore(tmpFile);
+    testStore.upsertStudent(
+      '2026-27',
+      {
+        rollNo: '126999001',
+        formNo: '501',
+        registrationNo: 'REG-999',
+        studentName: 'PRIYA SHARMA',
+        motherName: 'SUNITA',
+        fatherName: 'RAKESH',
+        subjects: 'HIND, ENG, MATH, SC, DRG, MSPE',
+        gender: 'F',
+        schoolCode: '1011',
+        schoolName: 'DEWAN INTER COLLEGE',
+        className: 10,
+      },
+      'BOARD',
+    );
+    const savedExams = testStore.saveExams(
+      '2026-27',
+      [
+        { examDate: '2026-03-10', shift: 'MORNING', className: 10, subjectCode: 'HIND' },
+        { examDate: '2026-03-12', shift: 'MORNING', className: 10, subjectCode: 'SCI' },
+        { examDate: '2026-03-15', shift: 'EVENING', className: 10, subjectCode: 'MATH' },
+      ],
+      'BOARD',
+    );
+
+    // Save a seat assignment for MATH
+    testStore.saveAssignmentsAndReport(
+      '2026-27',
+      [savedExams[2].id],
+      [
+        {
+          examId: savedExams[2].id,
+          examDate: '2026-03-15',
+          shift: 'EVENING',
+          roomNo: 'R-201',
+          floor: 2,
+          rowNo: 3,
+          columnNo: 2,
+          seatLabel: '3-2',
+          rollNo: '126999001',
+          studentName: 'PRIYA SHARMA',
+          className: 10,
+          gender: 'F',
+          schoolCode: '1011',
+          subjectCode: 'MATH',
+          isSparseMode: false,
+        },
+      ],
+      {
+        id: 'rep-1',
+        sessionYear: '2026-27',
+        moduleType: 'BOARD',
+        fileName: 'BoardPlan_test.pdf',
+        createdAt: new Date().toISOString(),
+        examDate: '2026-03-15',
+        shift: 'EVENING',
+        totalRooms: 1,
+        totalStudents: 1,
+        roomReports: [],
+      },
+      'BOARD',
+    );
+
+    const hits = testStore.lookupByRollNo('2026-27', '126999001', '2026-03-12');
+    assert.equal(hits.length, 1);
+    const sched = hits[0].subjectSchedule;
+    // MSPE grading marker stripped; 5 exam subjects remain
+    assert.equal(sched.length, 5);
+
+    const hind = sched.find((s) => s.subjectCode === 'HIND');
+    const sc = sched.find((s) => s.subjectCode === 'SC');
+    const math = sched.find((s) => s.subjectCode === 'MATH');
+    const drg = sched.find((s) => s.subjectCode === 'DRG');
+
+    assert.equal(hind?.status, 'Done');
+    assert.equal(hind?.examDate, '2026-03-10');
+    assert.equal(sc?.status, 'Today');
+    assert.equal(sc?.examDate, '2026-03-12');
+    assert.equal(math?.status, 'Upcoming');
+    assert.equal(math?.roomNo, 'R-201');
+    assert.equal(math?.seatLabel, '3-2');
+    assert.equal(drg?.status, 'Not Scheduled');
+  } finally {
+    if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  }
+});
+

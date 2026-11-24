@@ -94,7 +94,7 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
   const [extractSchoolCode, setExtractSchoolCode] = useState(isSchoolMode ? 'HOST' : '1011');
   const [extractClassName, setExtractClassName] = useState<'10' | '12'>('10');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [forceAiVision, setForceAiVision] = useState(!isSchoolMode);
+  const [forceAiVision, setForceAiVision] = useState(false);
   const [extractedRows, setExtractedRows] = useState<OcrStudentDto[]>([]);
   const [extractStatus, setExtractStatus] = useState<string | null>(null);
   const [failedPages, setFailedPages] = useState<string[]>([]);
@@ -121,7 +121,7 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
 
   useEffect(() => {
     setExtractSchoolCode(isSchoolMode ? 'HOST' : '1011');
-    setForceAiVision(!isSchoolMode);
+    setForceAiVision(false);
     setFormState(defaultForm);
     setClassFilter('ALL');
     setSchoolFilter('ALL');
@@ -355,9 +355,9 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
     e.target.value = '';
     if (!file) return;
     setSelectedFile(file);
-    setForceAiVision(true);
+    setForceAiVision(false);
     setSubTab('import');
-    void handleExtractFile(file, true);
+    void handleExtractFile(file, false);
   };
 
   const handleImportExtracted = async () => {
@@ -762,11 +762,11 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
                     className="h-3.5 w-3.5 accent-[#0F766E] rounded"
                   />
                   <span>
-                    Use AI Vision OCR for PDFs (recommended for scanned or rotated UP Board Nominal Rolls)
+                    Force AI Vision OCR for all pages (leave unchecked for Auto-Detect: instant parsing for portal soft-copy PDFs, AI Vision for scanned sheets)
                   </span>
                 </label>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Best accuracy tip: Press pages flat so the left ROLL-NO margin isn&apos;t clipped, avoid adjacent-page bleed, and upload 10–15 page batches.
+                  Tip: Portal soft-copy PDFs parse deterministically in &lt;1s with zero AI cost. For scanned sheets, keep left ROLL-NO margin unclipped and upload 10–15 page batches.
                 </p>
               </div>
             )}

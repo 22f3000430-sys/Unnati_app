@@ -191,6 +191,7 @@ export interface CenterProfile {
 }
 
 export interface RoomSeatingReport {
+  fillOrder?: number;
   roomNo: string;
   floor: number;
   rows: number;
@@ -325,9 +326,22 @@ export interface GeneratedReportFile {
   roomReports: RoomSeatingReport[];
 }
 
+export type SubjectScheduleStatus = 'Done' | 'Today' | 'Upcoming' | 'Not Scheduled';
+
+export interface StudentLookupSubjectDto {
+  subjectCode: string;
+  subjectName: string;
+  examDate: string | null;
+  shift: 'MORNING' | 'EVENING' | null;
+  status: SubjectScheduleStatus;
+  roomNo?: string;
+  seatLabel?: string;
+}
+
 export interface StudentLookupResult {
   moduleType: SeatingModuleType;
   student: Student;
+  subjectSchedule: StudentLookupSubjectDto[];
   assignments: Array<
     SeatAssignment & {
       roomRows: number;

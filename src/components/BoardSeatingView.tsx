@@ -5,6 +5,7 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronUp,
+  HelpCircle,
   Play,
   ShieldCheck,
   Square,
@@ -19,7 +20,9 @@ import type {
   TailRoomPolicy,
 } from '../types/seating.ts';
 import { apiFetch } from '../utils/api.ts';
+import { TAIL_STRATEGY_DETAILS } from '../utils/tailStrategyMeta.ts';
 import { SeatingPreviewModal } from './SeatingPreviewModal.tsx';
+import { StrategyInfoModal } from './StrategyInfoModal.tsx';
 import type { MasterTab } from './MasterDataView.tsx';
 
 interface SchoolQueueItem {
@@ -43,42 +46,11 @@ interface BoardSeatingViewProps {
 
 type GenderPolicy = 'separate' | 'reserve_girls' | 'mixed';
 
-const TAIL_POLICY_OPTIONS: Array<{
-  id: TailRoomPolicy;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: 'smart_tail_absorb',
-    label: 'Smart Tail Absorb (Recommended)',
-    description:
-      'Optimizes room sizes (36+30 vs 30+30+1) and absorbs 1–6 student tails into empty same-gender benches of another class.',
-  },
-  {
-    id: 'cross_class_tail',
-    label: 'Cross-Class Same-Gender Absorb',
-    description:
-      'Places leftover 1–6 student tails into empty seats of the opposite class (Girls with Girls, Boys with Boys).',
-  },
-  {
-    id: 'buffer_gender_merge',
-    label: 'Buffer Column Gender Merge',
-    description:
-      'Runs Smart Absorb first; if tiny Boys & Girls tails still remain, seats both in 1 room separated by an empty buffer column.',
-  },
-  {
-    id: 'rebalance_only',
-    label: 'Subset + Same-Cohort Rebalance',
-    description:
-      'Best-fit room subset lookahead and swaps strictly within the same class and gender.',
-  },
-  {
-    id: 'strict_separate',
-    label: 'Strict Separate (No Cross Mix)',
-    description:
-      'Never mixes classes or genders even if a trailing room holds only 1 student.',
-  },
-];
+const TAIL_POLICY_OPTIONS = TAIL_STRATEGY_DETAILS.map((d) => ({
+  id: d.id,
+  label: d.label,
+  description: d.summary,
+}));
 
 export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
   sessionYear,
@@ -109,6 +81,7 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
   const [previewData, setPreviewData] = useState<BoardSeatingPreviewResponse | null>(null);
   const [previewOptions, setPreviewOptions] = useState<SeatingGenerationOptions | null>(null);
   const [switchingPolicy, setSwitchingPolicy] = useState(false);
+  const [showStrategyInfo, setShowStrategyInfo] = useState(false);
 
   const isSchoolMode = moduleType === 'SCHOOL';
 
@@ -508,12 +481,22 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
 
             {/* Tail-Room Admin Options (> 3 Strategies) */}
             <div className="border-t border-[#ECEAE4] dark:border-[#213331] pt-3.5 space-y-2">
-              <label
-                htmlFor="tail-room-policy"
-                className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400"
-              >
-                Tail-Room Admin Strategy (5 Options)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="tail-room-policy"
+                  className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400"
+                >
+                  Tail-Room Admin Strategy (5 Options)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowStrategyInfo((v) => !v)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F766E] dark:text-teal-400 hover:underline cursor-pointer shrink-0"
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  Strategy Info
+                </button>
+              </div>
               <select
                 id="tail-room-policy"
                 value={tailRoomPolicy}
@@ -691,6 +674,12 @@ export const BoardSeatingView: React.FC<BoardSeatingViewProps> = ({
           onNotify={onNotify}
         />
       )}
+      <StrategyInfoModal
+        open={showStrategyInfo}
+        activePolicy={tailRoomPolicy}
+        onClose={() => setShowStrategyInfo(false)}
+        onSelectPolicy={(policy) => setTailRoomPolicy(policy)}
+      />
     </div>
   );
 };
